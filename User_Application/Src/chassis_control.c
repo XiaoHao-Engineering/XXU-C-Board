@@ -474,6 +474,8 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     /* ---- 射击机构（两摩擦轮 + 一拨弹轮，都挂 CAN2）；fire_* 只挂左轮，回调同步右轮 ---- */
     {"fire_rpm",     &user_shooter.fire_rpm,            0.0f, 9000.0f, NULL},
     {"step_deg",     &user_shooter.step_dial_deg,       1.0f,  180.0f, NULL},
+    /* ★ 拨盘方向：转反了就翻这个（-1 = 反向）。作用在目标角上，位置环反向是安全的 */
+    {"feed_dir",     &user_shooter.feeder_dir,         -1.0f,    1.0f, NULL},
     {"fire_int",     &user_shooter.fire_interval_ms,   30.0f, 1000.0f, NULL},
     {"fire_kp",      &user_shooter.friction_left_pid.kp, 0.0f, 200.0f, Chassis_Apply_Friction_Gain},
     {"fire_ki",      &user_shooter.friction_left_pid.ki, 0.0f,  50.0f, Chassis_Apply_Friction_Gain},

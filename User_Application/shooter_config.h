@@ -10,7 +10,12 @@
 #define SHOOTER_FRICTION_LEFT_DIR   ( 1.0f)
 #define SHOOTER_FRICTION_RIGHT_DIR  (-1.0f)
 
-#define SHOOTER_FEEDER_DIR          ( 1.0f)
+/* ★ 拨盘旋转方向：转反了就把这个改成 -1.0（现在已按实车设为 -1，即原来 +1 时是反的）。
+   安全性说明：拨盘是【位置环】，方向不能靠把电流输出取反（那会变成正反馈直接飞车）。
+   本工程把方向作用在【目标角】上（step_rotor_deg = DIR × 拨盘步长 × 减速比），
+   目标往回退 -> 位置环自然反向驱动，反馈符号不变，所以不会自激。
+   ★ 也可以在线改：feed_dir=-1# / feed_dir=1#（不用重新烧录就能试两个方向）。 */
+#define SHOOTER_FEEDER_DIR          (-1.0f)
 
 /* 摩擦轮转速（转子 RPM）：待发 / 发射 */
 #define SHOOTER_FRICTION_RPM_READY  (3500.0f)

@@ -55,6 +55,7 @@ typedef struct {
     float feeder_target_deg;         /* 拨弹轮转子目标角 deg（累加，内部用）*/
     float feeder_current;            /* 拨弹轮电流 mA */
     float feeder_err;
+    float feeder_dir;                /* 拨盘方向 +1/-1，可在线改（转反了翻这个）*/
     /* 状态机 float 镜像：枚举进不了串口绘图的 float* 通道表
        （0=STOP 1=SPINUP 2=FIRE 3=REVERSE）*/
     float state_f;

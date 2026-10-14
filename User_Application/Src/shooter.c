@@ -24,7 +24,8 @@ static float Shooter_Step_Rotor_Deg(const SHOOTER_DRIVES* shooter);
 /* 函数体 */
 
 static float Shooter_Step_Rotor_Deg(const SHOOTER_DRIVES* shooter) {
-    return SHOOTER_FEEDER_DIR * shooter->step_dial_deg * SHOOTER_FEEDER_GEAR;
+    /* 方向作用在【目标角】上，不是电流输出 —— 位置环这样反向才安全（见 shooter_config.h）*/
+    return shooter->feeder_dir * shooter->step_dial_deg * SHOOTER_FEEDER_GEAR;
 }
 
 static void Shooter_Feed_One_Step(SHOOTER_DRIVES* shooter, const float scale) {
@@ -101,6 +102,7 @@ void Shooter_Init(SHOOTER_DRIVES* shooter,
 
     shooter->fire_rpm = SHOOTER_FRICTION_RPM_FIRE;
     shooter->step_dial_deg = SHOOTER_FEEDER_STEP_DIAL_DEG;
+    shooter->feeder_dir = SHOOTER_FEEDER_DIR;
     shooter->fire_interval_ms = (float)SHOOTER_FIRE_INTERVAL_MS;
     shooter->distance_m = 3.0f;
     shooter->height_m = 0.0f;
