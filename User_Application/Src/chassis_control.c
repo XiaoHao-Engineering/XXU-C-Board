@@ -414,6 +414,10 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     /* ★ 摇杆速率限斜率 deg/s²：治"转快了冲出去再回来"。太小跟手变钝，太大等于没加 */
     {"gimbal_rate_slew", &user_gimbal.rate_slew, 0.0f, 20000.0f, NULL},
     {"gimbal_ff",  &user_gimbal.ff_gain, 0.0f, 1.0f, NULL},
+    /* ★★ 摇杆速率前馈增益（跟手主旋钮）：1.0 = 运动学精确值；>1 略微超喂，起步更利落。
+       前馈不在反馈回路里 -> 改它不影响稳定性，比加 gimbal_kp 安全。
+       代价：走的过程中云台略微"领着"目标，太大（>1.3）松杆会有橡皮筋感。 */
+    {"gimbal_kf",  &user_gimbal.stick_kf, 0.0f, 2.0f, NULL},
     /* ---- PID 测试波形（调内环用）：wave_en=1 后波形直接当转速指令，绕过外环
        wave_type: 0=HOLD 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE 5=SAW */
     {"wave_en",   &user_gimbal.wave_en,   0.0f,   1.0f, Gimbal_Wave_Apply},

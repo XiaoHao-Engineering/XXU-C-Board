@@ -32,6 +32,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->rate_slew = GIMBAL_RATE_SLEW;
     gimbal->yaw_rate_lpf = 0.0f;
     gimbal->ff_gain = GIMBAL_FF_GAIN;
+    gimbal->stick_kf = GIMBAL_YAW_KF;
     gimbal->target_rate = 0.0f;
     gimbal->last_dbus_count = 0;
     gimbal->dbus_offline_ms = 0;
@@ -314,8 +315,8 @@ static void Gimbal_Update(void* arg) {
     const float gyro_rate_rpm = user_attitude.yaw_rate * (1.0f / 6.0f);
     gimbal->yaw_rate_lpf += GIMBAL_WORLD_D_ALPHA * (gyro_rate_rpm - gimbal->yaw_rate_lpf);
 
-    /* deg/s -> RPM */
-    const float rate_rpm = gimbal->target_rate * (1.0f / 6.0f);
+    /* deg/s -> RPM，乘摇杆前馈增益 KF（>1 = 略微超喂，起步更利落；前馈不在反馈回路里，不影响稳定性）*/
+    const float rate_rpm = gimbal->target_rate * gimbal->stick_kf * (1.0f / 6.0f);
 
     /* 位置修正 = 位置环 + 陀螺阻尼 + 底盘前馈（这三项都是"修正量"）*/
     float correction = GIMBAL_YAW_DIR *
