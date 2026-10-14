@@ -117,7 +117,12 @@ static float Chassis_Spin_Omega(void) {
         }
         return (float)s_spin_dir * s_spin_w;
     }
+#if CHASSIS_RC_W_ENABLE
     return Stick(RC_Channel(CHASSIS_RC_W_CH)) * CHASSIS_MAX_W;
+#else
+    /* 右摇杆左右已经给云台 yaw 用了，手动模式不再从摇杆取自转 */
+    return 0.0f;
+#endif
 }
 
 /* 自转角速度速率限制：模式切换/换向时不让 omega 阶跃，避免"顿一下" */
@@ -417,6 +422,9 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"gimbal_kp",  &user_gimbal_yaw_pid.kp, 0.0f, 200.0f, NULL},
     {"gimbal_ki",  &user_gimbal_yaw_pid.ki, 0.0f,  50.0f, NULL},
     {"gimbal_kd",  &user_gimbal_yaw_pid.kd, 0.0f,  50.0f, NULL},
+    /* ★★★ 电流权限（满量程 16384）：yaw"一直不硬"的第一嫌疑就在这里。
+       原来是 3000（只有 18%，0.55A）；V2.2 默认 12000（2.2A）。可以在线试到 16384 看手感/发热。 */
+    {"gimbal_max_out", &user_gimbal_yaw_pid.max_out, 0.0f, 16384.0f, NULL},
 
     /* ---- 云台 pitch（GM6020 ID4，挂 CAN2，串级 + 增强 PID）----
        外环=角度环(deg->RPM)，内环=速度环(RPM->电流)；⚠️ pitch_spd_ki 不要为 0，顶重力

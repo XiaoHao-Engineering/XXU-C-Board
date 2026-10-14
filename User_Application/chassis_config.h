@@ -36,6 +36,12 @@
 #define CHASSIS_RC_VX_CH  (3)       /* 前后：左摇杆垂直 */
 #define CHASSIS_RC_VY_CH  (2)       /* 左右：左摇杆水平 */
 #define CHASSIS_RC_W_CH   (0)       /* 手动模式原地旋转：右摇杆水平 */
+
+/* ★ 手动模式是否允许"右摇杆左右 = 底盘原地自转"。
+   V2.1 起右摇杆左右已经给云台 yaw 用了，所以默认 1 -> 0（关掉），
+   底盘自转只保留在小陀螺/跟随模式里，右摇杆左右【只】控制 yaw。
+   想恢复成"手动模式也能用右摇杆转底盘"，改回 1 即可（但会和 yaw 抢同一个通道）。 */
+#define CHASSIS_RC_W_ENABLE (0)
 #define CHASSIS_SPIN_DIR_CH (2)     /* 小陀螺模式转向：左摇杆水平 */
 
 #define CHASSIS_RC_DEAD   (10)

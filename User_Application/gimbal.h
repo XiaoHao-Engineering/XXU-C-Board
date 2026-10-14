@@ -17,19 +17,25 @@
 #define GIMBAL_YAW_ZERO_DEG     (0.0f)       /* 云台正对底盘前方时的电机多圈角度 */
 #define GIMBAL_YAW_DIR          (1.0f)       /* 角度增大方向：+1 或 -1 现场核对 */
 
-#define GIMBAL_YAW_POWER_LIMIT  (90.0f)      /* 90W 对应 GM6020 电流满量程 */
+#define GIMBAL_YAW_POWER_LIMIT  (90.0f)      /* 单电机功率上限 W（GM6020 满量程 3A×24V=72W，所以 90W 不会成为瓶颈）*/
 
-/* 速度环 PID（Rotor_speed：目标/反馈都是转子转速 RPM，输出是电流刻度，量程 3000）。
+/* 速度环 PID（Rotor_speed：目标/反馈都是转子转速 RPM，输出是电流刻度，满量程 ±16384）。
    ⚠️⚠️ Ki 必须保持 0 —— 这条是踩过坑的：
      这个环用的是老 user_pid.c，Iout += ki*err 里【没有 dt】，而它被 1kHz 的 CAN 反馈调用，
      所以等效积分增益 = ki×1000。再叠加 GM6020 的 rotor_speed 是【整数】（静止时读数在
      0/±1 之间跳），Ki>0 会立刻形成静止极限环 —— 表现为"刚上电云台就慢慢抖"。
-     想要刚度请用外环的 world_kp + world_kd（那两条是有 dt 意识的），不要动这里的 Ki。 */
+     想要刚度请用下面的 MAX_OUT（电流权限）+ 外环 world_kp/world_kd，不要动这里的 Ki。 */
 #define GIMBAL_YAW_KP           (38.0f)
 #define GIMBAL_YAW_KI           (0.0f)
 #define GIMBAL_YAW_KD           (1.0f)
-#define GIMBAL_YAW_MAX_OUT      (3000.0f)    /* GM6020 电流帧量程 */
-#define GIMBAL_YAW_MAX_IOUT     (1000.0f)
+/* ★★★ 电流权限 —— 这是"yaw 一直不硬"的根因，不是增益问题：
+   原来这里是 3000，只有满量程 ±16384 的 18%！
+   换算：3000/16384 × 3A = 0.55A × 0.741N·m/A ≈ 0.41 N·m，而 GM6020 满量程能出 2.2 N·m。
+   即"再怎么调增益，最多只有 5.5 分之一 的扭矩可用"，所以怎么调都发软、被惯性拖着停不下来。
+   12000 ≈ 2.2A ≈ 1.6 N·m，功率 2.2A×24V = 53W 仍在 90W 预算内。
+   想再激进可以给到 16384（满量程 3A / 72W），但先确认机械和发热没问题。 */
+#define GIMBAL_YAW_MAX_OUT      (12000.0f)
+#define GIMBAL_YAW_MAX_IOUT     (1000.0f)    /* Ki=0 时不起作用，留着以防以后开积分 */
 
 /* 云台 yaw 遥控：1=开启。DBUS 通道号：0=右摇杆左右 1=右摇杆上下 2=左摇杆左右 3=左摇杆上下 */
 #define GIMBAL_RC_ENABLE        (1)
@@ -42,8 +48,8 @@
    ★ 整定顺序必须【先加阻尼 world_kd，再提增益 world_kp】，反过来必振荡。 */
 #define GIMBAL_WORLD_KP         (2.5f)       /* τ 6s -> 2.4s（原 1.0 太软；别再往上冲到 3.0 那次）*/
 /* 陀螺阻尼：用板载 IMU 的 yaw 角速度做阻尼，量纲 RPM/(deg/s)，纯运动学取值 = 1/6 ≈ 0.167。
-   偏软就加到 0.33（2 倍），一抖就往下调。在线调 gimbal_world_kd */
-#define GIMBAL_WORLD_KD         (0.22f)
+   "惯性能量停不下来"就是阻尼不够：先加这个，再加 world_kp。在线调 gimbal_world_kd */
+#define GIMBAL_WORLD_KD         (0.28f)
 /* 阻尼源一阶低通系数 0~1：陀螺噪声会直接进转速指令，越小滤得越狠、相位滞后越大 */
 #define GIMBAL_WORLD_D_ALPHA    (0.25f)
 /* 底盘角速度前馈系数：运动学上精确抵消底盘自转就是 1.0。
@@ -94,8 +100,14 @@
 #define GIMBAL_PITCH_POWER_LIMIT (90.0f)
 
 /* 软限位（度）：作用在"逻辑角"上，到限位就夹住目标，不会硬顶机构 */
-#define GIMBAL_PITCH_MIN_DEG    (-30.0f)
-#define GIMBAL_PITCH_MAX_DEG    ( 15.0f)
+/* 软件限位（度）—— ★ 按【物理方向】命名，避免正负号搞反：
+   你要的是"向前俯最多 15°、向后仰最多 30°"。
+   这里假定【向前俯 = 负角度、向后仰 = 正角度】；
+   若实测软限位方向还是反的，把下面两个数值对调即可（不用改别的）。 */
+#define GIMBAL_PITCH_FORWARD_MAX_DEG   (15.0f)   /* 向前俯的最大角度 */
+#define GIMBAL_PITCH_BACKWARD_MAX_DEG  (30.0f)   /* 向后仰的最大角度 */
+#define GIMBAL_PITCH_MIN_DEG    (-GIMBAL_PITCH_FORWARD_MAX_DEG)
+#define GIMBAL_PITCH_MAX_DEG    ( GIMBAL_PITCH_BACKWARD_MAX_DEG)
 
 /* 上电时枪管的真实俯仰角：上电前摆到水平就填 0，否则量出实际角度填这里（pitch 读数才是真角度，
    软限位才落在正确位置）。⚠️ 每次上电必须是同一姿态，否则零点会漂（同 yaw 的上电对准前方）*/
