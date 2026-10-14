@@ -46,17 +46,24 @@
    外环是"角度误差 -> 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 τ ≈ 6/world_kp 秒。
    原来 world_kp = 1.0 -> τ ≈ 6 秒 —— 这就是"云台偏软、走起来被惯性拖着"的根因。
    ★ 整定顺序必须【先加阻尼 world_kd，再提增益 world_kp】，反过来必振荡。 */
-#define GIMBAL_WORLD_KP         (2.7f)       /* τ 6s -> 2.2s（原来 1.0 太软；2.7 是加硬后的保守值）*/
+#define GIMBAL_WORLD_KP         (3.0f)       /* τ 6s -> 2.0s */
 /* 陀螺阻尼：用板载 IMU 的 yaw 角速度做阻尼，量纲 RPM/(deg/s)，纯运动学取值 = 1/6 ≈ 0.167。
-   ★ "推杆跟手但被惯性冲一下再回来"就是【阻尼不够】，要加的是这一项（D），不是 world_kp（P）——
-     加 P 只会让冲得更狠。在线调 gimbal_world_kd */
-#define GIMBAL_WORLD_KD         (0.35f)
+   ★ "转快了冲出去再回来"= 阻尼不够。这一项就是刹车，按 ζ（阻尼比）配：kd ≈ 2ζ√(6·kp·τ内)/6 - 1/6。
+     在线整定口诀：冲过头 -> 加 gimbal_world_kd；发飘/迟钝 -> 加 gimbal_world_kp。 */
+#define GIMBAL_WORLD_KD         (0.55f)
 /* 阻尼源一阶低通系数 0~1：陀螺噪声会直接进转速指令，越小滤得越狠、相位滞后越大。
    0.25 时滞后较大，把阻尼在高频处削弱了 -> 提到 0.40，阻尼能更早开始刹车（噪声大再往下调）*/
 #define GIMBAL_WORLD_D_ALPHA    (0.40f)
 /* 底盘角速度前馈系数：运动学上精确抵消底盘自转就是 1.0。
    原来 0.3 = 只补 30%，剩 70% 让位置环去追 -> 稳态滞后 + 摆动。抖就 0.8，迟钝就 1.0 */
 #define GIMBAL_FF_GAIN          (1.0f)
+/* ★ 摇杆速率限斜率 deg/s² —— 治"转快了冲出去再回来"的另一半：
+   松杆瞬间前馈从 344deg/s（满杆 6rad/s）直接掉到 0，而云台还在以 344deg/s 走，
+   位置环只能事后去追 -> 先冲出去再被拉回来。限斜率让前馈"先减下来"，
+   云台跟着平滑减速，超调显著变小。1500deg/s² -> 满杆到零约 0.23s。
+   太小会跟手变钝，太大等于没加。在线调 gimbal_rate_slew */
+#define GIMBAL_RATE_SLEW        (1500.0f)
+
 /* 修正量限幅 RPM —— ★ 只夹【位置修正部分】，摇杆前馈在限幅之后再相加（见 gimbal.c）。
    原来 60 太小：满杆前馈本身就 57 RPM，等于把阻尼余量挤没了 -> 冲一下再回来。
    它的职责只是拦住跨 ±180° 的一脚踹和 IMU 异常，150 RPM 足够宽松又仍能兜底。 */
@@ -68,7 +75,7 @@
    死区内把角度误差清零（阻尼与前馈仍然保留），静止就真的静止。
    pitch 外环早就有同样的死区（pitch_ang_dz），yaw 这里补上以保持一致。
    0.2~0.5 都合适；调太大跟踪会有静差。在线调 gimbal_world_dead */
-#define GIMBAL_WORLD_DEAD_DEG   (0.3f)
+#define GIMBAL_WORLD_DEAD_DEG   (0.2f)
 
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
@@ -122,11 +129,19 @@
 #define GIMBAL_PITCH_ANGLE_KP       (12.0f)
 #define GIMBAL_PITCH_ANGLE_KI       (2.0f)
 #define GIMBAL_PITCH_ANGLE_KD       (0.2f)
-#define GIMBAL_PITCH_ANGLE_KF       (0.0f)    /* 目标速度前馈（自动瞄准时可给一点）*/
+/* ★★★ 目标速度前馈 —— 这是"pitch 轻微推动响应慢/不跟手"的正解：
+   外环是"角度误差 -> 转速目标"，纯 P 要产生转速就必须先有误差：
+   要跟上 120deg/s 的目标，输出需要 20RPM，就得先攒 20/12 = 1.67° 的滞后 -> 手感"慢半拍"。
+   KF 把【目标的角速度】直接前馈进去，滞后直接归零（理论上 KF = 1/6 ≈ 0.167 就把
+   "deg/s 的目标速率" 精确换算成 "RPM 的输出"，因为 1RPM = 6deg/s）。
+   ⚠️ 前馈不参与死区，所以小推杆也会立刻动 —— 死区只影响 P 项，响应不再被死区拖慢。 */
+#define GIMBAL_PITCH_ANGLE_KF       (0.167f)
 #define GIMBAL_PITCH_ANGLE_MAX_OUT  (200.0f)  /* 外环输出上限 = 内环转速目标上限 RPM */
 #define GIMBAL_PITCH_ANGLE_MAX_IOUT (60.0f)
 #define GIMBAL_PITCH_ANGLE_MAX_DOUT (60.0f)
-#define GIMBAL_PITCH_ANGLE_DEAD     (0.15f)   /* 死区 deg：压住零位附近抖动 */
+/* 死区 deg：压住零位附近抖动。原来 0.15 偏大 —— 死区内 P 项为 0，
+   到位后会在这个范围内"自由飘"，表现为"动过去后还会轻轻动一点角度"。改成 0.08。 */
+#define GIMBAL_PITCH_ANGLE_DEAD     (0.08f)
 #define GIMBAL_PITCH_ANGLE_D_ALPHA  (0.4f)    /* D 项一阶低通 */
 #define GIMBAL_PITCH_ANGLE_IVAR_A   (6.0f)    /* 变速积分：6° 以内正常积分 */
 #define GIMBAL_PITCH_ANGLE_IVAR_B   (24.0f)   /* 6°~30° 线性衰减到 0 */
@@ -156,7 +171,10 @@
 #define GIMBAL_PITCH_RC_CH       (1)          /* ★ pitch = 右摇杆【上下】 */
 #define GIMBAL_PITCH_RC_DIR      (1.0f)       /* 推杆方向：+1 或 -1，现场核对 */
 #define GIMBAL_PITCH_MAX_W       (120.0f)     /* 满杆角速度 deg/s，可在线改 */
-#define GIMBAL_PITCH_RC_DEAD     (10)         /* 摇杆死区（DBUS ±660）*/
+/* 摇杆死区（DBUS ±660）。★ 必须大于遥控器松手后的实际静息偏移，否则目标角会一直
+   被残余杆量缓慢积分 -> 表现为"动过去后还会轻轻动一点角度"（PITCH 从拨轮改到摇杆时
+   我把这个值从 30 降到了 10，如果你的杆静息偏 10 以上就会爬）。在线调 pitch_dead。 */
+#define GIMBAL_PITCH_RC_DEAD     (20)
 #define GIMBAL_PITCH_AUTO_ENABLE_DEF (0.0f)
 
 /* 类型定义 */
@@ -174,6 +192,7 @@ typedef struct {
     float world_kp;                /* 锁世界位置环增益 RPM/deg，可在线改 */
     float world_kd;                /* 陀螺阻尼系数 RPM/(deg/s)，可在线改 */
     float world_dead;              /* 外环角度死区 deg，可在线改 */
+    float rate_slew;               /* 摇杆速率限斜率 deg/s²，可在线改 */
     float yaw_rate_lpf;            /* 陀螺 yaw 角速度低通状态（RPM）*/
     float target_rate;             /* 摇杆给的目标角速度 deg/s（外环前馈用）*/
     float ff_gain;                 /* 底盘角速度前馈系数 0~1，可在线改 */

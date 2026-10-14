@@ -411,6 +411,8 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"gimbal_world_kp", &user_gimbal.world_kp, 0.0f, 50.0f, NULL},
     {"gimbal_world_kd", &user_gimbal.world_kd, 0.0f, 2.0f, NULL},
     {"gimbal_world_dead", &user_gimbal.world_dead, 0.0f, 5.0f, NULL},
+    /* ★ 摇杆速率限斜率 deg/s²：治"转快了冲出去再回来"。太小跟手变钝，太大等于没加 */
+    {"gimbal_rate_slew", &user_gimbal.rate_slew, 0.0f, 20000.0f, NULL},
     {"gimbal_ff",  &user_gimbal.ff_gain, 0.0f, 1.0f, NULL},
     /* ---- PID 测试波形（调内环用）：wave_en=1 后波形直接当转速指令，绕过外环
        wave_type: 0=HOLD 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE 5=SAW */
@@ -434,6 +436,11 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"pitch_max_w",  &user_gimbal.pitch_max_w, 0.0f, 360.0f, NULL},
     {"pitch_auto",   &user_gimbal.pitch_auto,  0.0f,   1.0f, NULL},
     {"pitch_ang_kp", &user_gimbal.pitch_pid_angle.kp, 0.0f, 100.0f, NULL},
+    /* ★★★ pitch"轻微推动响应慢/不跟手"的正解：目标速度前馈 KF。
+       理论值 0.167（= 1/6，因为 1RPM = 6deg/s）。0 = 纯 P，要产生转速就必须先攒误差
+       （跟上 120deg/s 需要 20RPM 输出 -> kp=12 时要先有 1.67° 滞后）-> 手感慢半拍。
+       给到 0.167 滞后归零；给多了会过冲。前馈不受死区影响，所以小推杆也立刻有响应。 */
+    {"pitch_ang_kf", &user_gimbal.pitch_pid_angle.kf, 0.0f, 1.0f, NULL},
     {"pitch_ang_ki", &user_gimbal.pitch_pid_angle.ki, 0.0f,  50.0f, NULL},
     {"pitch_ang_kd", &user_gimbal.pitch_pid_angle.kd, 0.0f,  20.0f, NULL},
     {"pitch_ang_kf", &user_gimbal.pitch_pid_angle.kf, 0.0f,   5.0f, NULL},

@@ -29,6 +29,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->world_kp = GIMBAL_WORLD_KP;
     gimbal->world_kd = GIMBAL_WORLD_KD;
     gimbal->world_dead = GIMBAL_WORLD_DEAD_DEG;
+    gimbal->rate_slew = GIMBAL_RATE_SLEW;
     gimbal->yaw_rate_lpf = 0.0f;
     gimbal->ff_gain = GIMBAL_FF_GAIN;
     gimbal->target_rate = 0.0f;
@@ -237,7 +238,18 @@ static void Gimbal_Update(void* arg) {
 
 #if GIMBAL_LOCK_WORLD
     /* ★ 每周期都积分（本任务固定 1kHz，DT = 1ms）：stick 对应角速度 deg/s，既是积分增量也是外环前馈 */
-    gimbal->target_rate = stick * gimbal->max_w * RAD_TO_DEG * GIMBAL_YAW_DIR;
+    /* ★ 摇杆速率限斜率：松杆瞬间前馈从满杆速率直接掉到 0，而云台还在以那个速度走，
+       位置环只能事后去追 -> "冲出去再回来"。限斜率让前馈慢慢减下来，云台跟着平滑减速。
+       积分用的也是限斜率之后的 target_rate，所以目标角不会跳。 */
+    const float rate_cmd = stick * gimbal->max_w * RAD_TO_DEG * GIMBAL_YAW_DIR;
+    const float rate_step = gimbal->rate_slew * GIMBAL_DT_S;
+    if (rate_cmd > gimbal->target_rate + rate_step) {
+        gimbal->target_rate += rate_step;
+    } else if (rate_cmd < gimbal->target_rate - rate_step) {
+        gimbal->target_rate -= rate_step;
+    } else {
+        gimbal->target_rate = rate_cmd;
+    }
 
     gimbal->target_yaw += gimbal->target_rate * GIMBAL_DT_S;
     gimbal->target_yaw = Gimbal_Wrap180(gimbal->target_yaw);
