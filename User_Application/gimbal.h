@@ -25,7 +25,7 @@
      所以等效积分增益 = ki×1000。再叠加 GM6020 的 rotor_speed 是【整数】（静止时读数在
      0/±1 之间跳），Ki>0 会立刻形成静止极限环 —— 表现为"刚上电云台就慢慢抖"。
      想要刚度请用下面的 MAX_OUT（电流权限）+ 外环 world_kp/world_kd，不要动这里的 Ki。 */
-#define GIMBAL_YAW_KP           (38.0f)
+#define GIMBAL_YAW_KP           (48.0f)
 #define GIMBAL_YAW_KI           (0.0f)
 #define GIMBAL_YAW_KD           (1.0f)
 /* ★★★ 电流权限 —— 这是"yaw 一直不硬"的根因，不是增益问题：
@@ -40,7 +40,8 @@
 /* 云台 yaw 遥控：1=开启。DBUS 通道号：0=右摇杆左右 1=右摇杆上下 2=左摇杆左右 3=左摇杆上下 */
 #define GIMBAL_RC_ENABLE        (1)
 #define GIMBAL_RC_CH            (0)          /* ★ yaw = 右摇杆【左右】 */
-#define GIMBAL_YAW_MAX_W        (6.0f)       /* 满杆角速度 rad/s */
+#define GIMBAL_YAW_MAX_W        (3.0f)       /* 满杆角速度 rad/s：6.0=344deg/s 太快，高速下"停不下来"
+                                                与超调都随速度线性变差，降到 3.0=172deg/s。在线调 gimbal_max_w */
 
 /* ---- 锁世界位置环（抗惯性三件套）------------------------------------------
    外环是"角度误差 -> 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 τ ≈ 6/world_kp 秒。
@@ -61,8 +62,10 @@
    松杆瞬间前馈从 344deg/s（满杆 6rad/s）直接掉到 0，而云台还在以 344deg/s 走，
    位置环只能事后去追 -> 先冲出去再被拉回来。限斜率让前馈"先减下来"，
    云台跟着平滑减速，超调显著变小。1500deg/s² -> 满杆到零约 0.23s。
-   太小会跟手变钝，太大等于没加。在线调 gimbal_rate_slew */
-#define GIMBAL_RATE_SLEW        (1500.0f)
+   ★ 但它有代价：限斜率期间【目标角还在往前走】，所以"停不下来"会变明显一点。
+     满杆速度已降到 3.0rad/s，这里提到 2500deg/s²，让减速段缩到约 0.07s（多走约 6°），
+     既保住"不冲出去"，又不至于"停不下来"。太小会跟手变钝，太大等于没加。在线调 gimbal_rate_slew */
+#define GIMBAL_RATE_SLEW        (2500.0f)
 
 /* 修正量限幅 RPM —— ★ 只夹【位置修正部分】，摇杆前馈在限幅之后再相加（见 gimbal.c）。
    原来 60 太小：满杆前馈本身就 57 RPM，等于把阻尼余量挤没了 -> 冲一下再回来。
@@ -170,11 +173,13 @@
 #define GIMBAL_PITCH_RC_ENABLE   (1)
 #define GIMBAL_PITCH_RC_CH       (1)          /* ★ pitch = 右摇杆【上下】 */
 #define GIMBAL_PITCH_RC_DIR      (1.0f)       /* 推杆方向：+1 或 -1，现场核对 */
-#define GIMBAL_PITCH_MAX_W       (120.0f)     /* 满杆角速度 deg/s，可在线改 */
+#define GIMBAL_PITCH_MAX_W       (200.0f)     /* 满杆角速度 deg/s：120 时小幅推杆目标走得太慢（10% 杆=12deg/s），
+                                                 提到 200 让"轻微推动"也跟得上。在线调 pitch_max_w */
 /* 摇杆死区（DBUS ±660）。★ 必须大于遥控器松手后的实际静息偏移，否则目标角会一直
-   被残余杆量缓慢积分 -> 表现为"动过去后还会轻轻动一点角度"（PITCH 从拨轮改到摇杆时
-   我把这个值从 30 降到了 10，如果你的杆静息偏 10 以上就会爬）。在线调 pitch_dead。 */
-#define GIMBAL_PITCH_RC_DEAD     (20)
+   被残余杆量缓慢积分 -> "动过去后还会轻轻动一点角度"。
+   ⚠️ 它和"轻微推动的响应"是直接对立的：死区越大越不爬、但小杆量越迟钝。
+      12 是折中；先按 12 试，若还爬就 pitch_dead=20/25，若嫌迟钝就 pitch_dead=8。 */
+#define GIMBAL_PITCH_RC_DEAD     (12)
 #define GIMBAL_PITCH_AUTO_ENABLE_DEF (0.0f)
 
 /* 类型定义 */
