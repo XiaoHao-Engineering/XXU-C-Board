@@ -418,6 +418,9 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
        前馈不在反馈回路里 -> 改它不影响稳定性，比加 gimbal_kp 安全。
        代价：走的过程中云台略微"领着"目标，太大（>1.3）松杆会有橡皮筋感。 */
     {"gimbal_kf",  &user_gimbal.stick_kf, 0.0f, 2.0f, NULL},
+    /* ★★★ 陀螺零偏在线跟踪系数（治"不动摇杆也隔几秒飘一次"）。填 0 = 关闭，可做 A/B 对比。
+       默认 0.0002（1kHz 下 τ=5s）。它只在【摇杆居中 + 编码器没动】时工作。 */
+    {"gimbal_bias_k", &user_gimbal.bias_k, 0.0f, 0.01f, NULL},
     /* ---- PID 测试波形（调内环用）：wave_en=1 后波形直接当转速指令，绕过外环
        wave_type: 0=HOLD 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE 5=SAW */
     {"wave_en",   &user_gimbal.wave_en,   0.0f,   1.0f, Gimbal_Wave_Apply},

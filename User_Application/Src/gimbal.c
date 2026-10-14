@@ -33,6 +33,11 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->yaw_rate_lpf = 0.0f;
     gimbal->ff_gain = GIMBAL_FF_GAIN;
     gimbal->stick_kf = GIMBAL_YAW_KF;
+    gimbal->yaw_bias = 0.0f;
+    gimbal->bias_accum = 0.0f;
+    gimbal->bias_k = GIMBAL_BIAS_TRACK_ALPHA;
+    gimbal->enc_rate_lpf = 0.0f;
+    gimbal->enc_last = 0.0f;
     gimbal->target_rate = 0.0f;
     gimbal->last_dbus_count = 0;
     gimbal->dbus_offline_ms = 0;
@@ -279,6 +284,24 @@ static void Gimbal_Update(void* arg) {
 
     gimbal->yaw = Gimbal_Get_Yaw(gimbal);
 
+#if GIMBAL_LOCK_WORLD && GIMBAL_IMU_ON_GIMBAL
+    /* ★★ 陀螺零偏在线跟踪（根治"摇杆不动时每 5~6 秒飘一次"，原理见 gimbal.h）：
+       摇杆居中 + 编码器说云台没动 -> 真实角速度≈0 -> 测到的 yaw_rate 就是零偏，
+       低通后累积成 bias_accum，位置反馈用 imu_yaw - bias_accum。反馈量不再漂，
+       位置环就不用为了追零偏而让云台物理爬行。 */
+    const float enc_rate = (gimbal->yaw - gimbal->enc_last) / GIMBAL_DT_S;
+    gimbal->enc_last = gimbal->yaw;
+    gimbal->enc_rate_lpf += GIMBAL_ENC_RATE_ALPHA * (enc_rate - gimbal->enc_rate_lpf);
+
+    if (gimbal->bias_k > 0.0f
+        && stick == 0.0f
+        && gimbal->enc_rate_lpf <  GIMBAL_BIAS_ENC_MAX_RATE
+        && gimbal->enc_rate_lpf > -GIMBAL_BIAS_ENC_MAX_RATE) {
+        gimbal->yaw_bias += gimbal->bias_k * (user_attitude.yaw_rate - gimbal->yaw_bias);
+    }
+    gimbal->bias_accum += gimbal->yaw_bias * GIMBAL_DT_S;
+#endif
+
 #if GIMBAL_WAVE_ENABLE
     if (gimbal->wave_en > 0.5f) {
         /* ★ PID 测试模式：方波直接当转速指令、绕过外环；串口绘图看 gspd 跟随来调 kp/ki */
@@ -296,7 +319,8 @@ static void Gimbal_Update(void* arg) {
        ⚠️ 符号约定：陀螺阻尼与底盘前馈都是【世界系物理量】，和位置环同号放进 DIR 里；
           若把 GIMBAL_YAW_DIR 改成 -1，这三项的符号要一起重新核对。 */
 #if GIMBAL_IMU_ON_GIMBAL
-    const float world_yaw = gimbal->imu_yaw;
+    /* 减去累积的零偏估计：这样反馈量不会自己漂，位置环不用爬、也能保持满刚度 */
+    const float world_yaw = Gimbal_Wrap180(gimbal->imu_yaw - gimbal->bias_accum);
 #else
     /* IMU 装在底盘上：云台世界朝向 = 底盘世界朝向 + 云台相对底盘的编码器角 */
     const float world_yaw = Gimbal_Wrap180(gimbal->imu_yaw + gimbal->yaw);
