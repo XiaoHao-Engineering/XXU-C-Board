@@ -67,16 +67,19 @@ MODE_NAMES = {
     #       pid_i 接近 0。松手后 pitch 慢慢下沉且 psd_i 顶不上去，
     #       就加大 pitch_spd_ki 或 pitch_spd_mi。
     3: ["pitch", "ptgt", "pspd", "pid_i", "psd_i", "pcur"],
-    # 4 = 射击机构调试
+    # 4 = 射击机构 + CAN 总线排错
     #     frpm 原始转速 / frpm_f 滤波后 / frpm_t 目标 / ferr 拨弹轮位置误差
     #     fcur 拨弹轮滤波后电流 / bpitch 弹道解算角 / bv0 解算用初速
     #     fstate 状态机 0=STOP 1=SPINUP 2=FIRE 3=REVERSE
-    #     online 三个电机反馈状态：bit0=左轮 bit1=右轮 bit2=拨弹轮（0=都没反馈）
+    #     online 三电机反馈：bit0=左轮 bit1=右轮 bit2=拨弹轮（0=都没反馈）
     #     ready  摩擦轮是否已到转速（1=允许拨弹）
-    #   ★ 排查掉线：fstate 会变(1/2) 但 online=0 -> 电机真没反馈；
-    #               fstate 恒为 0 -> 遥控 sw2 档位没被识别
+    #     can1_rx / can2_rx 两条 CAN 总线的【原始收帧数】累计值
+    #       CAN1 有 4 底盘轮 + yaw 共 5 个电调 -> 约 +5000/s
+    #       CAN2 只有 pitch 时约 +1000/s；加上 2 摩擦轮 + 拨弹轮应约 +4000/s
+    #   ★ 排错：fstate 在变 但 online=0，且 can2_rx 只按 ~1000/s 涨
+    #           -> 那 3 个电调根本没在发报文（查接线 / 供电 / ESC ID）
     4: ["frpm", "frpm_f", "frpm_t", "ferr", "fcur", "bpitch", "bv0", "fstate",
-        "online", "ready"],
+        "online", "ready", "can1_rx", "can2_rx"],
 }
 
 DEFAULT_MODE = 2        # 和固件 chassis_config.h 的 CHASSIS_SERIALPLOT_MODE 一致

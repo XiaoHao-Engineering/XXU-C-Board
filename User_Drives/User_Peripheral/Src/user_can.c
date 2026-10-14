@@ -43,6 +43,9 @@ void CAN_Init(CAN_DRIVES* user_can, CAN_HandleTypeDef* hcan){
     user_can->tx_conf.IDE = CAN_ID_STD;
     user_can->tx_conf.RTR = CAN_RTR_DATA;
 
+    user_can->rx_count = 0;
+    user_can->rx_count_f = 0.0f;
+
     Circular_Queue_Init(&user_can->tx_queue, sizeof(CAN_Tx_Msg), 6);
 
     CAN_FilterTypeDef can_filter;
@@ -104,6 +107,9 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
             can_drive->rx_msg.IDE = RxHeader.IDE;
             can_drive->rx_msg.RTR = RxHeader.RTR;
             can_drive->rx_msg.DLC = RxHeader.DLC;
+
+            /* 原始收帧计数（排错用：判断这条总线上有没有设备在发），只做整数自增 */
+            can_drive->rx_count++;
 
             for (uint8_t i = 0; i < can_drive->callback_num; i++) {
                 can_drive->callbacks[i](can_drive);

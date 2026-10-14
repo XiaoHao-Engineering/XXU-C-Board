@@ -172,19 +172,21 @@ static void Chassis_Apply_Plot_Mode(void) {
             break;
 
         case 4:
-            /* 射击机构调试（10 通道）：frpm 摩擦轮实测 | frpm_f 滤波后 | frpm_t 目标转速 |
+            /* 射击/总线排错（12 通道）：frpm 摩擦轮实测 | frpm_f 滤波后 | frpm_t 目标转速 |
                ferr 拨弹轮位置误差 | fcur 滤波后电流 | bpitch 解算俯仰角 | bv0 弹丸初速 |
                fstate 状态机(0=STOP 1=SPINUP 2=FIRE 3=REVERSE) |
-               online 三电机反馈状态 bit0=左轮 bit1=右轮 bit2=拨弹轮 | ready 摩擦轮是否到转速
-               ★ 排查掉线：fstate 会变(1/2) 但 online=0 -> 电机真没反馈；
-                           fstate 恒为 0 -> 遥控 sw2 档位没被识别 */
-            Serialplot_Set_Data(&user_serialplot, 10,
+               online 三电机反馈 bit0=左轮 bit1=右轮 bit2=拨弹轮 | ready 摩擦轮是否到转速 |
+               can1_rx / can2_rx 两条总线的【原始收帧数】累计值（约 +5000/s / +1000~4000/s）
+               ★ fstate 会变(1/2) 但 online=0 -> 电机真没反馈（用 can2_rx 判断：
+                 只按 pitch 的 ~1000/s 涨 = 那 3 个电调根本没在发，查接线/供电/ESC ID）*/
+            Serialplot_Set_Data(&user_serialplot, 12,
                                 &user_shooter.friction_rpm, &user_shooter.friction_rpm_filt,
                                 &user_shooter.fire_rpm,
                                 &user_shooter.feeder_err, &user_shooter.feeder_current_filt,
                                 &user_shooter.ballistics.pitch_deg, &user_shooter.ballistics.v0,
                                 &user_shooter.state_f,
-                                &user_shooter.online_mask, &user_shooter.ready_f);
+                                &user_shooter.online_mask, &user_shooter.ready_f,
+                                &user_can_1.rx_count_f, &user_can_2.rx_count_f);
             break;
 
         case 2:
@@ -345,6 +347,10 @@ void ChassisControl_Update(void) {
     }
 
     omega *= s_omega_dir;
+
+    /* CAN 原始收帧数的 float 镜像（排错用）：放在 1kHz 任务里转换，避免在 CAN 中断里做软浮点 */
+    user_can_1.rx_count_f = (float)user_can_1.rx_count;
+    user_can_2.rx_count_f = (float)user_can_2.rx_count;
 
     Chassis_Set_Velocity(s_chassis, vx_body, vy_body, Chassis_Slew_Omega(omega));
     Chassis_Update(s_chassis);

@@ -20,9 +20,13 @@
 #define GIMBAL_YAW_POWER_LIMIT  (90.0f)      /* 90W 对应 GM6020 电流满量程 */
 
 /* 速度环 PID（Rotor_speed：目标/反馈都是转子转速 RPM，输出是电流刻度，量程 3000）。
-   Ki 原来给 0：纯 P 速度环有转速跌落、反向匀速跟踪有静差，给一点消掉。在线调 gimbal_kp/ki/kd */
+   ⚠️⚠️ Ki 必须保持 0 —— 这条是踩过坑的：
+     这个环用的是老 user_pid.c，Iout += ki*err 里【没有 dt】，而它被 1kHz 的 CAN 反馈调用，
+     所以等效积分增益 = ki×1000。再叠加 GM6020 的 rotor_speed 是【整数】（静止时读数在
+     0/±1 之间跳），Ki>0 会立刻形成静止极限环 —— 表现为"刚上电云台就慢慢抖"。
+     想要刚度请用外环的 world_kp + world_kd（那两条是有 dt 意识的），不要动这里的 Ki。 */
 #define GIMBAL_YAW_KP           (30.0f)
-#define GIMBAL_YAW_KI           (20.0f)
+#define GIMBAL_YAW_KI           (0.0f)
 #define GIMBAL_YAW_KD           (1.0f)
 #define GIMBAL_YAW_MAX_OUT      (3000.0f)    /* GM6020 电流帧量程 */
 #define GIMBAL_YAW_MAX_IOUT     (1000.0f)
@@ -36,7 +40,7 @@
    外环是"角度误差 -> 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 τ ≈ 6/world_kp 秒。
    原来 world_kp = 1.0 -> τ ≈ 6 秒 —— 这就是"云台偏软、走起来被惯性拖着"的根因。
    ★ 整定顺序必须【先加阻尼 world_kd，再提增益 world_kp】，反过来必振荡。 */
-#define GIMBAL_WORLD_KP         (3.0f)       /* τ 6s -> 2s；稳了可以再试 5.0 */
+#define GIMBAL_WORLD_KP         (2.0f)       /* τ 6s -> 3s；稳了再往 3.0 / 5.0 加 */
 /* 陀螺阻尼：用板载 IMU 的 yaw 角速度做阻尼，量纲 RPM/(deg/s)，纯运动学取值 = 1/6 ≈ 0.167。
    偏软就加到 0.33（2 倍），一抖就往下调。在线调 gimbal_world_kd */
 #define GIMBAL_WORLD_KD         (0.17f)
@@ -50,9 +54,10 @@
 
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
-   ⚠️ 必须按实车填对，填错会让锁世界锁错对象（云台跟着底盘转）。
-   10 秒判定法：① 固定底盘、手动转云台，看串口 gimu/yaw 变不变；② 固定云台、手动转底盘，再看。
-   哪个有反应，IMU 就在哪。 */
+   ✅ 本车已确认 = 1：C 板装在 yaw 与 pitch 的连接处（相当于"头部"），
+      所以板载 BMI088 的 yaw 就是云台的世界朝向，imu_yaw 可直接当云台世界角用。
+      ⚠️ 换车/挪板子必须重新确认，填错会让锁世界锁错对象（云台跟着底盘转）。
+      判定法：① 固定底盘、手动转云台，看串口 gimu/yaw 变不变；② 固定云台、手动转底盘，再看。 */
 #define GIMBAL_IMU_ON_GIMBAL    (1)
 #define GIMBAL_RC_DEAD          (10)
 

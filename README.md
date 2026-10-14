@@ -102,7 +102,12 @@ V1 用的 `world_kp = 1.0` → **τ ≈ 6 秒**，这就是"云台偏软、走�
 | 阻尼源低通 | `GIMBAL_WORLD_D_ALPHA` | 新增 0.25 | 陀螺噪声会直接进转速指令，越小滤得越狠、相位滞后越大 |
 | 底盘角速度前馈 | `GIMBAL_FF_GAIN` | 0.3 → **1.0** | 运动学上精确抵消底盘自转就是 1.0；0.3 只补 30%，剩 70% 让位置环追 → 滞后+摆动 |
 | 外环输出限幅 | `GIMBAL_WORLD_MAX_RPM` | 新增 60 | 原来**完全没有限幅**，跨 ±180° 时会一脚踹满速度环 |
-| 速度环积分 | `GIMBAL_YAW_KI` | 0 → **20** | 纯 P 速度环有转速跌落、反向匀速跟踪有静差 |
+
+> ⚠️⚠️ **`GIMBAL_YAW_KI` 必须保持 0** —— 这是踩过坑的：
+> 这个速度环用的是老 `user_pid.c`，`Iout += ki*err` 里**没有 dt**，而它被 1kHz 的 CAN 反馈调用，
+> 等效积分增益 = `ki × 1000`。再叠加 GM6020 的 `rotor_speed` 是**整数**（静止时读数在 0/±1 之间跳），
+> `Ki > 0` 会立刻形成**静止极限环** —— 表现就是"刚上电云台就慢慢抖"。
+> **要刚度请用外环的 `world_kp` + `world_kd`，不要动速度环的 Ki。**
 
 **整定顺序：先加阻尼（`gimbal_world_kd`）再提增益（`gimbal_world_kp`），反过来必振荡。**
 两个都能在线调。相关实现：`attitude.c` 现在把世界系 yaw 角速度 `yaw_rate` 暴露出来
@@ -232,15 +237,22 @@ cmake --build build --parallel
 | 1 | 8 | 4 轮的目标/反馈转子转速 |
 | **2**（默认）| 5 | `gyaw gtgt gimu gcmd gspd`（云台 yaw）|
 | **3** | 6 | `pitch ptgt pspd pid_i psd_i pcur`（云台 pitch）|
-| **4** | 10 | `frpm frpm_f frpm_t ferr fcur bpitch bv0 fstate online ready`（射击机构）|
+| **4** | 12 | `frpm frpm_f frpm_t ferr fcur bpitch bv0 fstate online ready can1_rx can2_rx`（射击 + CAN 排错）|
 
 > ★ 模式 3 里的 `psd_i` 就是**顶重力的内环积分**；模式 4 的 `fstate` 是状态机
 > （0=STOP 1=SPINUP 2=FIRE 3=REVERSE）。
 >
 > ★ **模式 4 排查"电机掉线"**：`online` 是三个电机的反馈状态打包（bit0=摩擦轮左
-> bit1=摩擦轮右 bit2=拨弹轮，7=都在线），`ready` 是摩擦轮是否到转速。
-> **`fstate` 会变(1/2) 但 `online`=0 → 电机真没反馈（查接线/供电/电调 ID）；
-> `fstate` 恒为 0 → 遥控 sw2 档位没被识别。**
+> bit1=摩擦轮右 bit2=拨弹轮，7=都在线），`ready` 是摩擦轮是否到转速，
+> `can1_rx` / `can2_rx` 是两条总线的**原始收帧数**（不看 ID）。
+> **判断表：**
+>
+> | 现象 | 结论 |
+> |---|---|
+> | `can2_rx` 约 **+1000/s 且不涨更快** | CAN2 上**只有 pitch 在发** → 那 3 个电调根本没在发报文：查接线 / 24V 供电 / **ESC ID（左1、右2、拨弹3）** |
+> | `can2_rx` 约 **+4000/s** 但 `online`=0 | 报文在发但 ID 对不上 → **ESC ID 配错了** |
+> | `online`=7 但 `frpm`=0 | 有反馈、在发指令但电机不转 → 查电调是否处于使能状态 / 电机相线 |
+> | `fstate` 恒为 0（不随 sw2 变）| 遥控 sw2 档位没被识别（上=1 单发 / 中=3 停火 / 下=2 连发）|
 >
 > ★ **调参表不受绘图模式影响** —— 任何模式下都能发 `pitch_spd_ki=300#` 改参数。
 
@@ -251,8 +263,8 @@ plot_mode=3#                                 切换绘图模式
 wheel_kp=15#  wheel_ki=0.15#  wheel_kd=0#    底盘轮速 PID
 rev_fl=1# rev_fr=-1#                         轮子装反了改 -1
 spin_w=4#  omega_dir=1#  dead=10#            小陀螺 / 方向 / 死区
-gimbal_world_kd=0.17#  gimbal_world_kp=3#    云台 yaw 抗惯性（先阻尼后增益）
-gimbal_ff=1.0#  gimbal_kp=30#  gimbal_ki=20# 云台 yaw 前馈 / 速度环
+gimbal_world_kd=0.17#  gimbal_world_kp=2#    云台 yaw 抗惯性（先阻尼后增益）
+gimbal_ff=1.0#  gimbal_kp=30#  gimbal_ki=0#  ★ki 必须保持 0（见第三节警告）
 pitch_spd_ki=300# pitch_ang_kp=12#           pitch 内环/外环
 fire_rpm=6000#  step_deg=45#  fire_int=120#  射击
 feed_spd_kp=8#  feed_ang_kp=6#               拨弹轮
@@ -326,9 +338,10 @@ v0_k=0.004#  v0_b=4.0#                       弹速模型（必须实测标定�
 - 量化根因：外环时间常数 τ ≈ 6/world_kp，V1 的 `world_kp=1.0` → **τ≈6 秒**
 - 新增**陀螺阻尼**项：`attitude.c` 原来把世界系 yaw 角速度 `yaw_rate` 算完就丢，现在暴露出来
   （`Attitude_Get_Yaw_Rate()`），经一阶低通后进外环做阻尼
-- 外环增益 1.0→3.0、前馈 0.3→1.0（0.3 只有运动学正确值的 30%）、速度环 Ki 0→20
+- 外环增益 1.0→**2.0**（τ 6s→3s，稳了再往 3.0/5.0 加）、前馈 0.3→**1.0**（0.3 只有运动学正确值的 30%）
 - **外环加输出限幅** `GIMBAL_WORLD_MAX_RPM=60`（原来完全没有限幅）
 - 新增 `GIMBAL_IMU_ON_GIMBAL` 处理"IMU 装在云台还是底盘"这个前提
+- **速度环 `GIMBAL_YAW_KI` 保持 0**：试过给 20，结果"刚上电云台就慢慢抖"（静止极限环，原因见第三节）
 
 **修掉小陀螺"卡一下"的真 bug**（原怀疑的 ±180° 经审计**不成立**）
 - `chassis_control.c` 小陀螺换向原来是 `(ch2 < 0) ? -spin_w : spin_w`，**没有死区**：

@@ -31,12 +31,20 @@ typedef struct {
 } CAN_Rx_Msg;
 
 typedef struct  {
-    CAN_HandleTypeDef* hcan;                    /* can 总线硬件句柄 */
+    CAN_HandleTypeDef* hcan;                    /* can 总线硬件硬件句柄 */
     CAN_Callback callbacks[CAN_CALLBACK_NUM];   /* 接收回调函数数组 */
     uint8_t callback_num;                       /* 已注册的回调函数数量 */
     volatile CAN_Tx_Config tx_conf;             /* 发送配置 */
     CAN_Rx_Msg rx_msg;                          /* 接收的消息 */
     CIRCULAR_QUEUE tx_queue;                    /* 发送队列 */
+    /* 排错用：本条总线上收到的【原始帧数】（不区分 ID）。
+       判断"这条总线上到底有没有设备在发"：
+         CAN1 有 4 个底盘轮 + yaw 共 5 个电调 -> 约 +5000/s
+         CAN2 只有 pitch 时约 +1000/s，再加 2 摩擦轮 + 拨弹轮应约 +4000/s
+       如果 CAN2 只按 pitch 的速率涨，说明那 3 个电调根本不在发 -> 查接线/供电/ESC ID。
+       rx_count 在中断里自增（只做整数加法）；rx_count_f 由 1kHz 任务转换，避免在中断里做浮点。 */
+    volatile uint32_t rx_count;
+    float rx_count_f;
 } CAN_DRIVES;
 
 /* 函数声明 */
