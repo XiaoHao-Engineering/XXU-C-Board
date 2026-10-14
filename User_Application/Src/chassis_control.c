@@ -405,6 +405,7 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"gimbal_max_w", &user_gimbal.max_w, 0.0f, 30.0f, NULL},
     {"gimbal_world_kp", &user_gimbal.world_kp, 0.0f, 50.0f, NULL},
     {"gimbal_world_kd", &user_gimbal.world_kd, 0.0f, 2.0f, NULL},
+    {"gimbal_world_dead", &user_gimbal.world_dead, 0.0f, 5.0f, NULL},
     {"gimbal_ff",  &user_gimbal.ff_gain, 0.0f, 1.0f, NULL},
     /* ---- PID 测试波形（调内环用）：wave_en=1 后波形直接当转速指令，绕过外环
        wave_type: 0=HOLD 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE 5=SAW */

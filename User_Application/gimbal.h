@@ -52,6 +52,14 @@
 /* 外环输出限幅 RPM —— 原来完全没有限幅，跨 ±180° 或 IMU 异常时会一脚踹满速度环 */
 #define GIMBAL_WORLD_MAX_RPM    (60.0f)
 
+/* ★★ 外环死区 deg —— 这是"停着不动也慢慢抖"的关键一条：
+   本工程 IMU 的 yaw 是【纯陀螺积分、没有绝对参考】（互补滤波只融合了 pitch），
+   静止时 yaw 会缓慢漂移；外环去追这个漂移，就表现为静止时慢慢抖/慢慢转。
+   死区内把角度误差清零（阻尼与前馈仍然保留），静止就真的静止。
+   pitch 外环早就有同样的死区（pitch_ang_dz），yaw 这里补上以保持一致。
+   0.2~0.5 都合适；调太大跟踪会有静差。在线调 gimbal_world_dead */
+#define GIMBAL_WORLD_DEAD_DEG   (0.3f)
+
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
    ✅ 本车已确认 = 1：C 板装在 yaw 与 pitch 的连接处（相当于"头部"），
@@ -146,6 +154,7 @@ typedef struct {
     float max_w;                   /* 满杆角速度 rad/s，可在线改 */
     float world_kp;                /* 锁世界位置环增益 RPM/deg，可在线改 */
     float world_kd;                /* 陀螺阻尼系数 RPM/(deg/s)，可在线改 */
+    float world_dead;              /* 外环角度死区 deg，可在线改 */
     float yaw_rate_lpf;            /* 陀螺 yaw 角速度低通状态（RPM）*/
     float target_rate;             /* 摇杆给的目标角速度 deg/s（外环前馈用）*/
     float ff_gain;                 /* 底盘角速度前馈系数 0~1，可在线改 */

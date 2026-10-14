@@ -29,6 +29,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->max_w = GIMBAL_YAW_MAX_W;
     gimbal->world_kp = GIMBAL_WORLD_KP;
     gimbal->world_kd = GIMBAL_WORLD_KD;
+    gimbal->world_dead = GIMBAL_WORLD_DEAD_DEG;
     gimbal->yaw_rate_lpf = 0.0f;
     gimbal->ff_gain = GIMBAL_FF_GAIN;
     gimbal->target_rate = 0.0f;
@@ -287,7 +288,15 @@ static void Gimbal_Update(void* arg) {
     /* IMU 装在底盘上：云台世界朝向 = 底盘世界朝向 + 云台相对底盘的编码器角 */
     const float world_yaw = Gimbal_Wrap180(gimbal->imu_yaw + gimbal->yaw);
 #endif
-    const float error = Gimbal_Wrap180(gimbal->target_yaw - world_yaw);
+    float error = Gimbal_Wrap180(gimbal->target_yaw - world_yaw);
+
+    /* ★ 死区：IMU 的 yaw 是纯陀螺积分、没有绝对参考，静止时会缓慢漂移。
+       外环不设死区就会一直去追这个漂移，表现为"停着不动也慢慢抖/慢慢转"。
+       死区内把误差清零 —— 只清 P 项，阻尼与前馈仍然工作。
+       （pitch 外环早就有同样的死区 pitch_ang_dz，这里保持一致）*/
+    if (error < gimbal->world_dead && error > -gimbal->world_dead) {
+        error = 0.0f;
+    }
 
     /* 陀螺 yaw 角速度 deg/s -> RPM（/360*60 = /6），先一阶低通压噪声再进阻尼 */
     const float gyro_rate_rpm = user_attitude.yaw_rate * (1.0f / 6.0f);
