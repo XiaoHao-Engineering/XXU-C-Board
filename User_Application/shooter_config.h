@@ -46,21 +46,22 @@
 #define SHOOTER_FEEDER_SPEED_MAX_IOUT (2000.0f)
 #define SHOOTER_FEEDER_POWER_MAX      (30.0f)
 
-/* 遥控 sw2 档位（与底盘用的 sw1 分工，互不冲突）：上(1)=单发 中(3)=停火 下(2)=连发 */
-#define SHOOTER_SW2_SINGLE          (1)
-#define SHOOTER_SW2_AUTO            (2)
-#define SHOOTER_SW2_STOP            (3)
-#define SHOOTER_SW_VALID(v)         ((v) == SHOOTER_SW2_SINGLE || (v) == SHOOTER_SW2_AUTO)
+/* 遥控 sw2 档位（右拨杆，与底盘用的 sw1 分工）——【从上到下】：
+     上(1) = 仅摩擦轮：摩擦轮起转到 fire_rpm，但【不拨弹】
+     中(3) = 无：全停
+     下(2) = 摩擦轮 + 拨弹盘：摩擦轮起转，并按 fire_interval_ms 连续拨弹
+   ⚠️ DBUS 的档位编码是 上=1 / 下=2 / 中=3（和底盘的 sw1 同一套约定，别想当然按 1/2/3 顺序）*/
+#define SHOOTER_SW2_FRICTION_ONLY   (1)      /* 上：只转摩擦轮 */
+#define SHOOTER_SW2_FIRE            (2)      /* 下：摩擦轮 + 拨弹盘 */
+#define SHOOTER_SW2_STOP            (3)      /* 中：全停 */
+#define SHOOTER_SW_VALID(v)         ((v) == SHOOTER_SW2_FRICTION_ONLY || (v) == SHOOTER_SW2_FIRE)
 
-/* ⚠️ 拨轮 roll 已被 pitch 轴占用（见 gimbal.h），所以默认 0，直接用 sw2 档位当扳机：
-   单发档取进入边沿（挂起后等就绪再打），连发档取电平；roll 范围 ±660，超阈值算扣下 */
-#define SHOOTER_TRIGGER_USE_WHEEL   (0)
-#define SHOOTER_TRIGGER_THRESHOLD   (300)
+/* 拨弹触发：现在【下档】直接就拨弹，不需要额外扳机。
+   ★ 左上角拨轮 roll 因为 pitch 改到右摇杆而空出来了：想改成"按住拨轮才拨弹"，
+     只要在 shooter.c 的 feed_enable 定义里与上 (user_dbus.roll > 阈值) 即可。 */
 
-/* 连发间隔 ms；单发一次走几步；连发是否需要按住扳机（1=按住才连发，更安全）*/
+/* 拨弹间隔 ms（下档连续拨弹的节奏）*/
 #define SHOOTER_FIRE_INTERVAL_MS    (120)
-#define SHOOTER_SINGLE_SHOTS        (1)
-#define SHOOTER_AUTO_NEED_TRIGGER   (1)
 
 /* 卡弹判据：位置没跟上 且 电流大，两条同时持续 JAM_MS 才判 ——
    只看电流会被机构本身的机械冲击误触发。ERR 是转子角 deg，CURRENT 是 C610 刻度 */

@@ -38,8 +38,7 @@ static void Shooter_Enter_State(SHOOTER_DRIVES* shooter, const Shooter_State sta
     if (state == SHOOTER_STATE_FIRE) {
         /* ★ 进 FIRE 时目标角对齐当前位置：否则机构被手动拨过或目标角停在 0，一进 FIRE 会猛追一段直接卡弹 */
         shooter->feeder_target_deg = shooter->feeder_angle;
-        shooter->shots_left = 0;
-        /* 让连发的第一次可以立刻打出来 */
+        /* 让拨弹的第一步可以立刻走出来 */
         shooter->fire_timer_ms = (uint32_t)shooter->fire_interval_ms;
     } else if (state == SHOOTER_STATE_SPINUP) {
         shooter->is_ready = 0;
@@ -87,10 +86,6 @@ void Shooter_Init(SHOOTER_DRIVES* shooter,
     shooter->state_ms = 0;
     shooter->fire_timer_ms = 0;
     shooter->jam_timer_ms = 0;
-    shooter->shots_left = 0;
-    shooter->was_triggered = 0;
-    shooter->fire_pending = 0;
-    shooter->last_sw2 = 0;
     shooter->jam_count = 0;
     shooter->is_online = 0;
     shooter->is_ready = 0;
@@ -192,27 +187,10 @@ static void Shooter_Update(void* arg) {
 
     const uint8_t sw2 = user_dbus.sw2;
 
-    /* 单发档的【进入边沿】：拨到单发档的那一下算一次触发 */
-    const uint8_t single_edge =
-        (sw2 == SHOOTER_SW2_SINGLE && shooter->last_sw2 != SHOOTER_SW2_SINGLE) ? 1 : 0;
-
-#if SHOOTER_TRIGGER_USE_WHEEL
-    /* 拨轮当扳机（当前不可用：拨轮被 pitch 占用）*/
-    const uint8_t trigger_level = (user_dbus.roll > SHOOTER_TRIGGER_THRESHOLD) ? 1 : 0;
-    const uint8_t trigger_edge = (trigger_level != 0 && shooter->was_triggered == 0) ? 1 : 0;
-#else
-    const uint8_t trigger_level = (sw2 == SHOOTER_SW2_AUTO) ? 1 : 0;
-    const uint8_t trigger_edge = single_edge;
-#endif
-
-    shooter->was_triggered = trigger_level;
-    shooter->last_sw2 = sw2;
-
-    /* ★ 单发请求做成"挂起"而不是当场消费：从停火拨到单发那一下往往发生在 SPINUP 期间，
-       当场消费的话进 FIRE 已经没得打，第一发永远打不出去；进 FIRE 且就绪后再消费 */
-    if (trigger_edge) {
-        shooter->fire_pending = 1;
-    }
+    /* 拨弹允许：只有【下档 = 摩擦轮 + 拨弹盘】才拨弹；上档=仅摩擦轮，中档=全停。
+       拨轮 roll 因为 pitch 改到摇杆而空出来了 —— 若以后想改成"按住拨轮才拨弹"，
+       在这里与上 (user_dbus.roll > 阈值) 即可，不需要改状态机。 */
+    const uint8_t feed_enable = (sw2 == SHOOTER_SW2_FIRE) ? 1 : 0;
 
     /* 摩擦轮是否已到转速：用【滤波后】的转速判断，避免噪声误判 */
     shooter->is_ready = (fabsf(shooter->friction_rpm_filt - shooter->fire_rpm)
@@ -226,15 +204,10 @@ static void Shooter_Update(void* arg) {
     switch (shooter->state) {
         case SHOOTER_STATE_STOP:
             shooter->friction_target = 0.0f;
-            shooter->shots_left = 0;
             /* 停火时目标角跟随实际角：位置误差恒 0 -> 位置环不输出，拨盘不发力也不发热 */
             shooter->feeder_target_deg = shooter->feeder_angle;
             if (SHOOTER_SW_VALID(sw2)) {
                 Shooter_Enter_State(shooter, SHOOTER_STATE_SPINUP);
-            } else {
-                /* 停在停火档：丢掉挂起的单发请求，免得以后莫名打一发。不能无条件清 ——
-                   拨到单发那一拍的 pending 正是本拍置上的，无条件清会导致第一发永远打不出去 */
-                shooter->fire_pending = 0;
             }
             break;
 
@@ -275,37 +248,19 @@ static void Shooter_Update(void* arg) {
                 shooter->jam_timer_ms = 0;
             }
 
-            /* 发射。没到转速就什么都不做，并把连发计时清零 */
-            if (shooter->is_ready) {
-                if (sw2 == SHOOTER_SW2_AUTO) {
-#if SHOOTER_AUTO_NEED_TRIGGER
-                    if (trigger_level) {
-#else
-                    if (1) {
-#endif
-                        if (shooter->fire_timer_ms >= (uint32_t)shooter->fire_interval_ms) {
-                            shooter->fire_timer_ms = 0;
-                            Shooter_Feed_One_Step(shooter, 1.0f);
-                        } else {
-                            shooter->fire_timer_ms += SHOOTER_PERIOD_MS;
-                        }
-                    } else {
-                        shooter->fire_timer_ms = 0;
-                    }
-                } else if (sw2 == SHOOTER_SW2_SINGLE) {
+            /* 拨弹。没到转速就什么都不做，并把计时清零。
+               上档（仅摩擦轮）同样进 FIRE 保持转速，但 feed_enable=0 -> 不拨弹、目标角跟手 */
+            if (shooter->is_ready && feed_enable) {
+                if (shooter->fire_timer_ms >= (uint32_t)shooter->fire_interval_ms) {
                     shooter->fire_timer_ms = 0;
-                    /* 消费挂起的单发请求（可能是在 SPINUP 期间拨的档）*/
-                    if (shooter->fire_pending) {
-                        shooter->fire_pending = 0;
-                        shooter->shots_left = SHOOTER_SINGLE_SHOTS;
-                    }
-                    if (shooter->shots_left > 0) {
-                        shooter->shots_left--;
-                        Shooter_Feed_One_Step(shooter, 1.0f);
-                    }
+                    Shooter_Feed_One_Step(shooter, 1.0f);
+                } else {
+                    shooter->fire_timer_ms += SHOOTER_PERIOD_MS;
                 }
             } else {
                 shooter->fire_timer_ms = 0;
+                /* 不拨弹时让目标角跟随实际角，避免积累误差、松档时突然追一大段 */
+                shooter->feeder_target_deg = shooter->feeder_angle;
             }
             break;
 

@@ -11,8 +11,7 @@ static GIMBAL_DRIVES* s_gimbal = NULL;
 static void  Gimbal_Update(void* arg);
 static void  Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal);
 static float Gimbal_Wrap180(float deg);
-static float Gimbal_Stick(int16_t value);
-static float Gimbal_Wheel(int16_t value, float dead);
+static float Gimbal_Stick(int16_t value, float dead);
 static int16_t Gimbal_RC_Channel(uint8_t ch);
 
 void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
@@ -94,8 +93,9 @@ void Gimbal_Pitch_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* pitch_motor) {
     gimbal->target_pitch = 0.0f;
     gimbal->pitch_speed = 0.0f;
     gimbal->pitch_current = 0.0f;
-    gimbal->pitch_wheel = 0.0f;
-    gimbal->pitch_wheel_dead = (float)GIMBAL_PITCH_WHEEL_DEAD;
+    gimbal->pitch_stick = 0.0f;
+    gimbal->pitch_rc_ch = (float)GIMBAL_PITCH_RC_CH;
+    gimbal->pitch_dead = (float)GIMBAL_PITCH_RC_DEAD;
     gimbal->pitch_max_w = GIMBAL_PITCH_MAX_W;
     gimbal->pitch_auto = GIMBAL_PITCH_AUTO_ENABLE_DEF;
     gimbal->pitch_speed_target = 0.0f;
@@ -232,7 +232,7 @@ static void Gimbal_Update(void* arg) {
 
     /* 遥控断线就把杆量当 0：锁世界模式会停住不动，速度模式会主动刹车 */
     const float stick = (gimbal->dbus_offline_ms < GIMBAL_OFFLINE_MS)
-                      ? Gimbal_Stick(Gimbal_RC_Channel((uint8_t)gimbal->rc_ch))
+                      ? Gimbal_Stick(Gimbal_RC_Channel((uint8_t)gimbal->rc_ch), (float)GIMBAL_RC_DEAD)
                       : 0.0f;
 
 #if GIMBAL_LOCK_WORLD
@@ -371,8 +371,9 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
         return;
     }
 
-    /* 遥控：★ 用遥控器左上角【拨轮 roll】控制俯仰 —— 拨轮偏转 → 目标角以恒定角速度走，回中即停 */
-    float wheel = 0.0f;
+    /* 遥控：★ pitch 用【右摇杆上下】（通道可在线改 pitch_ch）——
+       推杆 → 目标角以恒定角速度走，松杆即停在当前目标角 */
+    float stick = 0.0f;
 
 #if GIMBAL_PITCH_RC_ENABLE
     if (user_dbus.rx_count != gimbal->last_pitch_dbus_count) {
@@ -382,17 +383,17 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
         gimbal->pitch_dbus_offline_ms++;
     }
 
-    /* 遥控断线就把拨轮当 0：目标角停在原地，不会乱动 */
+    /* 遥控断线就把杆量当 0：目标角停在原地，不会乱动 */
     if (gimbal->pitch_dbus_offline_ms < GIMBAL_OFFLINE_MS) {
-        wheel = Gimbal_Wheel(user_dbus.roll, gimbal->pitch_wheel_dead);
+        stick = Gimbal_Stick(Gimbal_RC_Channel((uint8_t)gimbal->pitch_rc_ch), gimbal->pitch_dead);
     }
 #endif
 
-    gimbal->pitch_wheel = wheel;
+    gimbal->pitch_stick = stick;
 
-    /* pitch_auto != 0 时目标角由上层（弹道解算）给，拨轮不参与，避免互相打架 */
+    /* pitch_auto != 0 时目标角由上层（弹道解算）给，摇杆不参与，避免互相打架 */
     if (gimbal->pitch_auto < 0.5f) {
-        gimbal->target_pitch += wheel * gimbal->pitch_max_w * GIMBAL_PITCH_WHEEL_DIR * GIMBAL_DT_S;
+        gimbal->target_pitch += stick * gimbal->pitch_max_w * GIMBAL_PITCH_RC_DIR * GIMBAL_DT_S;
     }
 
     /* 软限位：夹住目标角；目标固定后误差不再增大、积分也不再涨，等于顺带做了抗积分饱和 */
@@ -468,15 +469,8 @@ static float Gimbal_Wrap180(float deg) {
     return deg;
 }
 
-static float Gimbal_Stick(const int16_t value) {
-    if (value > -GIMBAL_RC_DEAD && value < GIMBAL_RC_DEAD) {
-        return 0.0f;
-    }
-    return (float)value / YAW_STICK_MAX;
-}
-
-/* 拨轮（DBUS 的 roll，范围也是 ±660）归一化到 -1~1，带死区 */
-static float Gimbal_Wheel(const int16_t value, const float dead) {
+/* 摇杆归一化到 -1~1，带死区（yaw 与 pitch 共用；两个轴死区可各自在线调）*/
+static float Gimbal_Stick(const int16_t value, const float dead) {
     if (value > -dead && value < dead) {
         return 0.0f;
     }

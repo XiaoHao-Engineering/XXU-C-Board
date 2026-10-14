@@ -25,25 +25,25 @@
      所以等效积分增益 = ki×1000。再叠加 GM6020 的 rotor_speed 是【整数】（静止时读数在
      0/±1 之间跳），Ki>0 会立刻形成静止极限环 —— 表现为"刚上电云台就慢慢抖"。
      想要刚度请用外环的 world_kp + world_kd（那两条是有 dt 意识的），不要动这里的 Ki。 */
-#define GIMBAL_YAW_KP           (30.0f)
+#define GIMBAL_YAW_KP           (38.0f)
 #define GIMBAL_YAW_KI           (0.0f)
 #define GIMBAL_YAW_KD           (1.0f)
 #define GIMBAL_YAW_MAX_OUT      (3000.0f)    /* GM6020 电流帧量程 */
 #define GIMBAL_YAW_MAX_IOUT     (1000.0f)
 
-/* 云台 yaw 遥控：1=开启。DBUS 通道号：0=右手水平 1=右手垂直 2=左手水平 3=左手垂直 */
+/* 云台 yaw 遥控：1=开启。DBUS 通道号：0=右摇杆左右 1=右摇杆上下 2=左摇杆左右 3=左摇杆上下 */
 #define GIMBAL_RC_ENABLE        (1)
-#define GIMBAL_RC_CH            (1)          /* ★ 用哪个通道：1 = 右摇杆上下 */
+#define GIMBAL_RC_CH            (0)          /* ★ yaw = 右摇杆【左右】 */
 #define GIMBAL_YAW_MAX_W        (6.0f)       /* 满杆角速度 rad/s */
 
 /* ---- 锁世界位置环（抗惯性三件套）------------------------------------------
    外环是"角度误差 -> 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 τ ≈ 6/world_kp 秒。
    原来 world_kp = 1.0 -> τ ≈ 6 秒 —— 这就是"云台偏软、走起来被惯性拖着"的根因。
    ★ 整定顺序必须【先加阻尼 world_kd，再提增益 world_kp】，反过来必振荡。 */
-#define GIMBAL_WORLD_KP         (2.0f)       /* τ 6s -> 3s；稳了再往 3.0 / 5.0 加 */
+#define GIMBAL_WORLD_KP         (2.5f)       /* τ 6s -> 2.4s（原 1.0 太软；别再往上冲到 3.0 那次）*/
 /* 陀螺阻尼：用板载 IMU 的 yaw 角速度做阻尼，量纲 RPM/(deg/s)，纯运动学取值 = 1/6 ≈ 0.167。
    偏软就加到 0.33（2 倍），一抖就往下调。在线调 gimbal_world_kd */
-#define GIMBAL_WORLD_KD         (0.17f)
+#define GIMBAL_WORLD_KD         (0.22f)
 /* 阻尼源一阶低通系数 0~1：陀螺噪声会直接进转速指令，越小滤得越狠、相位滞后越大 */
 #define GIMBAL_WORLD_D_ALPHA    (0.25f)
 /* 底盘角速度前馈系数：运动学上精确抵消底盘自转就是 1.0。
@@ -134,10 +134,13 @@
 
 /* pitch 遥控：★ 用遥控器【左上角拨轮 roll】控制俯仰（yaw 占了右摇杆、底盘占了左摇杆，拨轮空着）。
    拨轮偏转 → 目标角以恒定角速度走，拨轮回中即停在当前目标角；行程由 MIN/MAX_DEG 软限位兜住。 */
+/* pitch 遥控：★ 改用【右摇杆上下】（原来在左上角拨轮；拨轮已空出来，
+   若想改回拨轮或换成别的通道，只要改 GIMBAL_PITCH_RC_CH 或在线上发 pitch_ch=N#）*/
 #define GIMBAL_PITCH_RC_ENABLE   (1)
-#define GIMBAL_PITCH_WHEEL_DIR   (1.0f)       /* 拨轮方向：+1 或 -1，现场核对 */
-#define GIMBAL_PITCH_MAX_W       (120.0f)     /* 满拨轮角速度 deg/s，可在线改 */
-#define GIMBAL_PITCH_WHEEL_DEAD  (30)         /* 拨轮死区（DBUS roll 范围 ±660）*/
+#define GIMBAL_PITCH_RC_CH       (1)          /* ★ pitch = 右摇杆【上下】 */
+#define GIMBAL_PITCH_RC_DIR      (1.0f)       /* 推杆方向：+1 或 -1，现场核对 */
+#define GIMBAL_PITCH_MAX_W       (120.0f)     /* 满杆角速度 deg/s，可在线改 */
+#define GIMBAL_PITCH_RC_DEAD     (10)         /* 摇杆死区（DBUS ±660）*/
 #define GIMBAL_PITCH_AUTO_ENABLE_DEF (0.0f)
 
 /* 类型定义 */
@@ -187,8 +190,9 @@ typedef struct {
     float target_pitch;                    /* 目标俯仰角 deg（拨轮积分 / 弹道解算写入）*/
     float pitch_speed;                     /* 电机转速 RPM（观察用）*/
     float pitch_current;                   /* 电机电流 mA（观察用）*/
-    float pitch_wheel;                     /* 归一化拨轮量 -1~1（观察用）*/
-    float pitch_wheel_dead;                /* 拨轮死区（DBUS roll 原始值），可在线改 */
+    float pitch_stick;                     /* 归一化摇杆量 -1~1（观察用）*/
+    float pitch_rc_ch;                     /* pitch 遥控通道 0~3，可在线改 */
+    float pitch_dead;                      /* pitch 摇杆死区（DBUS 原始值），可在线改 */
     float pitch_max_w;                     /* 满拨轮角速度 deg/s，可在线改 */
     float pitch_auto;                      /* 1=目标由上层写入（弹道解算），可在线改 */
     float pitch_speed_target;              /* CASCADE=0 时外环算出的转速目标（观察用）*/

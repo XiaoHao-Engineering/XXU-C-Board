@@ -45,10 +45,6 @@ typedef struct {
     uint32_t state_ms;
     uint32_t fire_timer_ms;
     uint32_t jam_timer_ms;
-    uint8_t  shots_left;
-    uint8_t  was_triggered;
-    uint8_t  fire_pending;           /* 单发请求挂起：SPINUP 期间不能消费边沿，否则第一发永远打不出去 */
-    uint8_t  last_sw2;
     uint8_t  jam_count;
     uint8_t  is_online;
     uint8_t  is_ready;               /* 1=摩擦轮已到转速，允许拨弹 */

@@ -421,7 +421,8 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     /* ---- 云台 pitch（GM6020 ID4，挂 CAN2，串级 + 增强 PID）----
        外环=角度环(deg->RPM)，内环=速度环(RPM->电流)；⚠️ pitch_spd_ki 不要为 0，顶重力
        靠【内环】积分。_da=低通 _dz=死区 _ia/_ib=变速积分 _is=分离 _mo/_mi/_md=三段限幅 */
-    {"pitch_dead",   &user_gimbal.pitch_wheel_dead, 0.0f, 200.0f, NULL},
+    {"pitch_ch",     &user_gimbal.pitch_rc_ch, 0.0f,   3.0f, NULL},
+    {"pitch_dead",   &user_gimbal.pitch_dead, 0.0f, 200.0f, NULL},
     {"pitch_max_w",  &user_gimbal.pitch_max_w, 0.0f, 360.0f, NULL},
     {"pitch_auto",   &user_gimbal.pitch_auto,  0.0f,   1.0f, NULL},
     {"pitch_ang_kp", &user_gimbal.pitch_pid_angle.kp, 0.0f, 100.0f, NULL},
