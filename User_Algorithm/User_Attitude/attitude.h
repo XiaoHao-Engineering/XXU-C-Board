@@ -36,6 +36,7 @@ typedef struct {
     float yaw_gyro;                 /* 陀螺积分偏航 deg */
 
     float pitch, yaw;               /* 输出姿态角 deg */
+    float yaw_rate;                 /* 世界系 yaw 角速度 deg/s（已按俯仰投影补偿），给云台做阻尼 */
     float yaw_offset;               /* 偏航零位偏移 */
     uint32_t update_cnt;            /* 更新次数 */
 } ATTITUDE_DRIVES;
@@ -48,6 +49,7 @@ void  Attitude_Reset_Yaw(ATTITUDE_DRIVES* attitude);
 
 float Attitude_Get_Pitch(const ATTITUDE_DRIVES* attitude);
 float Attitude_Get_Yaw(const ATTITUDE_DRIVES* attitude);
+float Attitude_Get_Yaw_Rate(const ATTITUDE_DRIVES* attitude);
 
 #endif /* HAL_SPI_MODULE_ENABLED */
 #endif // ATTITUDE_H

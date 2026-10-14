@@ -21,9 +21,15 @@
 #define CHASSIS_REV_RR    (-1)
 
 /* 速度限幅 ----------------------------------------------------------------*/
+/* ⚠️ CHASSIS_MAX_W 同时钳住小陀螺自转角速度（Chassis_Set_Velocity 内有幅值钳位），
+   所以必须 >= CHASSIS_SPIN_W，否则 spin_w 调到 3 以上会【静默钳掉】、调了没反应。 */
 #define CHASSIS_MAX_VX    (2.0f)    /* m/s */
 #define CHASSIS_MAX_VY    (2.0f)    /* m/s */
-#define CHASSIS_MAX_W     (3.0f)    /* rad/s */
+#define CHASSIS_MAX_W     (5.0f)    /* rad/s */
+
+/* 自转角速度速率限制 rad/s²：小陀螺换向/模式切换时不让 omega 阶跃。
+   1kHz 下 30 rad/s² = 每拍最多变 0.03；满幅 ±4 反向约 0.27s，不顿挫也不迟钝。0=关闭 */
+#define CHASSIS_W_SLEW    (30.0f)
 
 /* 遥控器映射 --------------------------------------------------------------*/
 /* DBUS 通道号：0=右手水平 1=右手垂直 2=左手水平 3=左手垂直 */

@@ -28,6 +28,8 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->rc_ch = (float)GIMBAL_RC_CH;
     gimbal->max_w = GIMBAL_YAW_MAX_W;
     gimbal->world_kp = GIMBAL_WORLD_KP;
+    gimbal->world_kd = GIMBAL_WORLD_KD;
+    gimbal->yaw_rate_lpf = 0.0f;
     gimbal->ff_gain = GIMBAL_FF_GAIN;
     gimbal->target_rate = 0.0f;
     gimbal->last_dbus_count = 0;
@@ -273,17 +275,40 @@ static void Gimbal_Update(void* arg) {
 #endif
 
 #if GIMBAL_LOCK_WORLD
-    /* ★ 锁世界 = 位置环 + 两路前馈：① 底盘角速度前馈 —— 底盘以 omega 自转时云台须相对底盘反向
-       转同样角速度，才能在世界系里不动；② 摇杆前馈 —— 消除跟踪斜坡输入的固有滞后。都带 DIR */
-    const float error = Gimbal_Wrap180(gimbal->target_yaw - gimbal->imu_yaw);
+    /* ★ 锁世界 = 位置环 + 三路抗惯性：
+       ① 陀螺阻尼 —— 用 IMU 的 yaw 角速度做阻尼，抑制"被惯性拖着走/回摆"
+       ② 底盘角速度前馈 —— 底盘自转时云台须相对底盘反向同速，才能在世界系里不动
+       ③ 摇杆前馈 —— 消除跟踪斜坡输入的固有滞后
+       ⚠️ 符号约定：陀螺阻尼与底盘前馈都是【世界系物理量】，和位置环同号放进 DIR 里；
+          若把 GIMBAL_YAW_DIR 改成 -1，这三项的符号要一起重新核对。 */
+#if GIMBAL_IMU_ON_GIMBAL
+    const float world_yaw = gimbal->imu_yaw;
+#else
+    /* IMU 装在底盘上：云台世界朝向 = 底盘世界朝向 + 云台相对底盘的编码器角 */
+    const float world_yaw = Gimbal_Wrap180(gimbal->imu_yaw + gimbal->yaw);
+#endif
+    const float error = Gimbal_Wrap180(gimbal->target_yaw - world_yaw);
 
-    /* deg/s -> RPM：/360*60 = /6 */
+    /* 陀螺 yaw 角速度 deg/s -> RPM（/360*60 = /6），先一阶低通压噪声再进阻尼 */
+    const float gyro_rate_rpm = user_attitude.yaw_rate * (1.0f / 6.0f);
+    gimbal->yaw_rate_lpf += GIMBAL_WORLD_D_ALPHA * (gyro_rate_rpm - gimbal->yaw_rate_lpf);
+
+    /* deg/s -> RPM */
     const float rate_rpm = gimbal->target_rate * (1.0f / 6.0f);
 
-    gimbal->target_speed = GIMBAL_YAW_DIR *
-                           (gimbal->world_kp * error
-                            - user_chassis.omega * RAD_S_TO_RPM * gimbal->ff_gain)
-                           + rate_rpm;
+    float target_speed = GIMBAL_YAW_DIR *
+                         (gimbal->world_kp * error
+                          - gimbal->world_kd * gimbal->yaw_rate_lpf
+                          - user_chassis.omega * RAD_S_TO_RPM * gimbal->ff_gain)
+                         + rate_rpm;
+
+    /* 外环限幅：跨 ±180° 或 IMU 异常时不让外环一脚踹满速度环 */
+    if (target_speed > GIMBAL_WORLD_MAX_RPM) {
+        target_speed = GIMBAL_WORLD_MAX_RPM;
+    } else if (target_speed < -GIMBAL_WORLD_MAX_RPM) {
+        target_speed = -GIMBAL_WORLD_MAX_RPM;
+    }
+    gimbal->target_speed = target_speed;
 
     gimbal->yaw_motor->Set_Motor_State(gimbal->yaw_motor, gimbal->target_speed);
 #else

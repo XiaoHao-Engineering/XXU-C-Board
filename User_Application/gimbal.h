@@ -2,6 +2,7 @@
 #define GIMBAL_H
 
 #include "main.h"
+#include "../User_Architect/user_systick.h"
 #include "../User_Drives/User_Motor/user_dji_motor.h"
 #include "../User_Algorithm/User_Controller/user_pid.h"
 #include "../User_Algorithm/User_Controller/user_pid_adv.h"
@@ -18,10 +19,10 @@
 
 #define GIMBAL_YAW_POWER_LIMIT  (90.0f)      /* 90W 对应 GM6020 电流满量程 */
 
-/* 速度环 PID（Rotor_speed：目标/反馈都是转子转速 RPM，输出是电流刻度，量程 3000）：Kp=25 → 1 RPM
-   误差给 25 输出；Ki 消摩擦稳态误差；Kd=0（RPM 是整数、差分噪声大）。在线调 gimbal_kp/ki/kd */
+/* 速度环 PID（Rotor_speed：目标/反馈都是转子转速 RPM，输出是电流刻度，量程 3000）。
+   Ki 原来给 0：纯 P 速度环有转速跌落、反向匀速跟踪有静差，给一点消掉。在线调 gimbal_kp/ki/kd */
 #define GIMBAL_YAW_KP           (30.0f)
-#define GIMBAL_YAW_KI           (0.0f)
+#define GIMBAL_YAW_KI           (20.0f)
 #define GIMBAL_YAW_KD           (1.0f)
 #define GIMBAL_YAW_MAX_OUT      (3000.0f)    /* GM6020 电流帧量程 */
 #define GIMBAL_YAW_MAX_IOUT     (1000.0f)
@@ -30,9 +31,29 @@
 #define GIMBAL_RC_ENABLE        (1)
 #define GIMBAL_RC_CH            (1)          /* ★ 用哪个通道：1 = 右摇杆上下 */
 #define GIMBAL_YAW_MAX_W        (6.0f)       /* 满杆角速度 rad/s */
-#define GIMBAL_WORLD_KP         (1.0f)       /* 锁世界位置环增益 RPM/deg */
-/* 底盘角速度前馈系数 0~1：开环前馈，底盘延迟/打滑时给满会过补偿（云台来回追 → theta 抖 → 车头摇），抖就调小，迟钝就调大 */
-#define GIMBAL_FF_GAIN          (0.3f)
+
+/* ---- 锁世界位置环（抗惯性三件套）------------------------------------------
+   外环是"角度误差 -> 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 τ ≈ 6/world_kp 秒。
+   原来 world_kp = 1.0 -> τ ≈ 6 秒 —— 这就是"云台偏软、走起来被惯性拖着"的根因。
+   ★ 整定顺序必须【先加阻尼 world_kd，再提增益 world_kp】，反过来必振荡。 */
+#define GIMBAL_WORLD_KP         (3.0f)       /* τ 6s -> 2s；稳了可以再试 5.0 */
+/* 陀螺阻尼：用板载 IMU 的 yaw 角速度做阻尼，量纲 RPM/(deg/s)，纯运动学取值 = 1/6 ≈ 0.167。
+   偏软就加到 0.33（2 倍），一抖就往下调。在线调 gimbal_world_kd */
+#define GIMBAL_WORLD_KD         (0.17f)
+/* 阻尼源一阶低通系数 0~1：陀螺噪声会直接进转速指令，越小滤得越狠、相位滞后越大 */
+#define GIMBAL_WORLD_D_ALPHA    (0.25f)
+/* 底盘角速度前馈系数：运动学上精确抵消底盘自转就是 1.0。
+   原来 0.3 = 只补 30%，剩 70% 让位置环去追 -> 稳态滞后 + 摆动。抖就 0.8，迟钝就 1.0 */
+#define GIMBAL_FF_GAIN          (1.0f)
+/* 外环输出限幅 RPM —— 原来完全没有限幅，跨 ±180° 或 IMU 异常时会一脚踹满速度环 */
+#define GIMBAL_WORLD_MAX_RPM    (60.0f)
+
+/* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
+                  0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
+   ⚠️ 必须按实车填对，填错会让锁世界锁错对象（云台跟着底盘转）。
+   10 秒判定法：① 固定底盘、手动转云台，看串口 gimu/yaw 变不变；② 固定云台、手动转底盘，再看。
+   哪个有反应，IMU 就在哪。 */
+#define GIMBAL_IMU_ON_GIMBAL    (1)
 #define GIMBAL_RC_DEAD          (10)
 
 /* 掉线保护：连续多少 ms 收不到 GM6020 反馈就判定掉线 */
@@ -119,6 +140,8 @@ typedef struct {
     float rc_ch;                   /* 遥控通道 0~3，可在线改 */
     float max_w;                   /* 满杆角速度 rad/s，可在线改 */
     float world_kp;                /* 锁世界位置环增益 RPM/deg，可在线改 */
+    float world_kd;                /* 陀螺阻尼系数 RPM/(deg/s)，可在线改 */
+    float yaw_rate_lpf;            /* 陀螺 yaw 角速度低通状态（RPM）*/
     float target_rate;             /* 摇杆给的目标角速度 deg/s（外环前馈用）*/
     float ff_gain;                 /* 底盘角速度前馈系数 0~1，可在线改 */
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */

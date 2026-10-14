@@ -101,6 +101,8 @@ void Shooter_Init(SHOOTER_DRIVES* shooter,
     shooter->feeder_current = 0.0f;
     shooter->feeder_err = 0.0f;
     shooter->state_f = 0.0f;
+    shooter->online_mask = 0.0f;
+    shooter->ready_f = 0.0f;
 
     shooter->fire_rpm = SHOOTER_FRICTION_RPM_FIRE;
     shooter->step_dial_deg = SHOOTER_FEEDER_STEP_DIAL_DEG;
@@ -322,6 +324,12 @@ static void Shooter_Update(void* arg) {
 
     /* 状态机镜像给串口绘图看（0=STOP 1=SPINUP 2=FIRE 3=REVERSE）*/
     shooter->state_f = (float)shooter->state;
+
+    /* 三个电机的反馈状态打包成一个数给上位机看：bit0=左轮 bit1=右轮 bit2=拨弹轮 */
+    shooter->online_mask = (float)((DJI_Motor_Is_Online(shooter->friction_left) ? 1 : 0)
+                                 | (DJI_Motor_Is_Online(shooter->friction_right) ? 2 : 0)
+                                 | (DJI_Motor_Is_Online(shooter->feeder) ? 4 : 0));
+    shooter->ready_f = (float)shooter->is_ready;
 
     /* ★ 必须判"这个电机曾经上过线"再下发：Set_Motor_State 是电机结构体里的【函数指针】，
        只有 DJI_Motor_Init 才会赋值；本模块任务在它之前就注册（顺序见 main.c），早跑会空指针调用 -> HardFault。

@@ -1,6 +1,6 @@
 # XXU-RoboMaster-Sentry（C 板）
 
-新乡学院 RoboMaster 哨兵控制工程 —— **RoboMaster 开发板 C 型（STM32F407IGH6）**。
+**版本 V2.0** ｜ 新乡学院 RoboMaster 哨兵控制工程 —— **RoboMaster 开发板 C 型（STM32F407IGH6）**。
 
 > 分层结构、文件路径、命名与注释风格与 A 板原工程一致；移植过程与 CubeMX 改动见
 > [docs/C板移植说明.md](docs/C板移植说明.md)。
@@ -83,12 +83,36 @@ docs/                 架构分析 / 控制原理 / 移植说明 / 上机流程
 
 | 轴 | 电机 | 控制方式 |
 |---|---|---|
-| yaw | GM6020 (ID1) @CAN1 | `Rotor_speed`；**锁世界外环**写在 `gimbal.c`，用板载 IMU 做反馈 + 角速度前馈 |
+| yaw | GM6020 (ID1) @CAN1 | `Rotor_speed`；**锁世界外环**写在 `gimbal.c`（位置环 + 陀螺阻尼 + 角速度前馈）|
 | pitch | GM6020 (ID4) @CAN2 | `Rotor_angle` + 注入 `Cascade_Controller`（外环角度 → 内环速度 → 电流）|
 
 - `GIMBAL_PITCH_CASCADE = 0` 可退回单环（电机只跑速度环，角度环在 `gimbal.c` 里算）。
 - **软限位** `GIMBAL_PITCH_MIN_DEG / MAX_DEG`（默认 -30° ~ +15°）。
 - **pitch 遥控用左上角拨轮**（DBUS `roll`）；yaw 用右摇杆垂直。
+
+#### yaw 抗惯性（V2.0 重点）
+
+外环是"角度误差 → 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 **τ ≈ 6/world_kp 秒**。
+V1 用的 `world_kp = 1.0` → **τ ≈ 6 秒**，这就是"云台偏软、走起来被惯性拖着"的根因。V2.0 三件套：
+
+| 项 | 宏 | V1 → V2.0 | 说明 |
+|---|---|---|---|
+| 位置环增益 | `GIMBAL_WORLD_KP` | 1.0 → **3.0** | τ 6s → 2s；稳了可再试 5.0 |
+| **陀螺阻尼** | `GIMBAL_WORLD_KD` | 新增 **0.17** | 用 IMU 的 yaw 角速度做阻尼。量纲 RPM/(deg/s)，纯运动学值 = 1/6≈0.167；偏软加到 0.33，一抖就降 |
+| 阻尼源低通 | `GIMBAL_WORLD_D_ALPHA` | 新增 0.25 | 陀螺噪声会直接进转速指令，越小滤得越狠、相位滞后越大 |
+| 底盘角速度前馈 | `GIMBAL_FF_GAIN` | 0.3 → **1.0** | 运动学上精确抵消底盘自转就是 1.0；0.3 只补 30%，剩 70% 让位置环追 → 滞后+摆动 |
+| 外环输出限幅 | `GIMBAL_WORLD_MAX_RPM` | 新增 60 | 原来**完全没有限幅**，跨 ±180° 时会一脚踹满速度环 |
+| 速度环积分 | `GIMBAL_YAW_KI` | 0 → **20** | 纯 P 速度环有转速跌落、反向匀速跟踪有静差 |
+
+**整定顺序：先加阻尼（`gimbal_world_kd`）再提增益（`gimbal_world_kp`），反过来必振荡。**
+两个都能在线调。相关实现：`attitude.c` 现在把世界系 yaw 角速度 `yaw_rate` 暴露出来
+（V1 里算完就丢了），`gimbal.c` 对它有低通后进阻尼项。
+
+> ⚠️ **`GIMBAL_IMU_ON_GIMBAL` 必须按实车填对**：
+> `1` = IMU 装在云台上（`imu_yaw` 就是云台世界朝向，直接用）；
+> `0` = IMU 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）。
+> **填错会让锁世界锁错对象（云台跟着底盘转）。**
+> 10 秒判定法：① 固定底盘、手动转云台，看串口 `gimu`/`yaw` 变不变；② 固定云台、手动转底盘，再看。哪个有反应，IMU 就在哪。
 
 > ⚠️ **pitch 上电姿态决定零点**：收到第一帧后会把"当前位置"标定成
 > `GIMBAL_PITCH_ZERO_BIAS_DEG`。所以**每次上电前把枪管摆到同一姿态**
@@ -208,10 +232,15 @@ cmake --build build --parallel
 | 1 | 8 | 4 轮的目标/反馈转子转速 |
 | **2**（默认）| 5 | `gyaw gtgt gimu gcmd gspd`（云台 yaw）|
 | **3** | 6 | `pitch ptgt pspd pid_i psd_i pcur`（云台 pitch）|
-| **4** | 8 | `frpm frpm_f frpm_t ferr fcur bpitch bv0 fstate`（射击机构）|
+| **4** | 10 | `frpm frpm_f frpm_t ferr fcur bpitch bv0 fstate online ready`（射击机构）|
 
 > ★ 模式 3 里的 `psd_i` 就是**顶重力的内环积分**；模式 4 的 `fstate` 是状态机
 > （0=STOP 1=SPINUP 2=FIRE 3=REVERSE）。
+>
+> ★ **模式 4 排查"电机掉线"**：`online` 是三个电机的反馈状态打包（bit0=摩擦轮左
+> bit1=摩擦轮右 bit2=拨弹轮，7=都在线），`ready` 是摩擦轮是否到转速。
+> **`fstate` 会变(1/2) 但 `online`=0 → 电机真没反馈（查接线/供电/电调 ID）；
+> `fstate` 恒为 0 → 遥控 sw2 档位没被识别。**
 >
 > ★ **调参表不受绘图模式影响** —— 任何模式下都能发 `pitch_spd_ki=300#` 改参数。
 
@@ -221,7 +250,9 @@ cmake --build build --parallel
 plot_mode=3#                                 切换绘图模式
 wheel_kp=15#  wheel_ki=0.15#  wheel_kd=0#    底盘轮速 PID
 rev_fl=1# rev_fr=-1#                         轮子装反了改 -1
-gimbal_kp=30# gimbal_ki=0# gimbal_kd=1#      云台 yaw
+spin_w=4#  omega_dir=1#  dead=10#            小陀螺 / 方向 / 死区
+gimbal_world_kd=0.17#  gimbal_world_kp=3#    云台 yaw 抗惯性（先阻尼后增益）
+gimbal_ff=1.0#  gimbal_kp=30#  gimbal_ki=20# 云台 yaw 前馈 / 速度环
 pitch_spd_ki=300# pitch_ang_kp=12#           pitch 内环/外环
 fire_rpm=6000#  step_deg=45#  fire_int=120#  射击
 feed_spd_kp=8#  feed_ang_kp=6#               拨弹轮
@@ -282,10 +313,47 @@ v0_k=0.004#  v0_b=4.0#                       弹速模型（必须实测标定�
 | 增强 PID 的 `dt` 写死 | 默认 0.001，等于 CAN 反馈周期；改反馈率要同步改 |
 | MIDI 曲库里 `bad_apple` | 885 音符约 177 秒，未被使用；开机音乐已加 1.5s 总时长上限 |
 | IST8310 / IMU 恒温 | 板载但未启用 |
+| BMI088 SPI 偏慢 | 预分频 256（328kHz），每拍阻塞读约 463µs，且控制任务组跑在最低优先级；若直行时也有顿挫，把 SPI 预分频改成 `_16`（5.25MHz，BMI088 上限 10MHz）|
+| yaw 抗惯性参数是起步值 | `gimbal_world_kp/kd/ff` 需上机按"先阻尼后增益"整定 |
 
 ---
 
-## 九、文档
+## 九、版本历史
+
+### V2.0
+
+**新增云台 yaw 抗惯性（这是"偏软"的根治）**
+- 量化根因：外环时间常数 τ ≈ 6/world_kp，V1 的 `world_kp=1.0` → **τ≈6 秒**
+- 新增**陀螺阻尼**项：`attitude.c` 原来把世界系 yaw 角速度 `yaw_rate` 算完就丢，现在暴露出来
+  （`Attitude_Get_Yaw_Rate()`），经一阶低通后进外环做阻尼
+- 外环增益 1.0→3.0、前馈 0.3→1.0（0.3 只有运动学正确值的 30%）、速度环 Ki 0→20
+- **外环加输出限幅** `GIMBAL_WORLD_MAX_RPM=60`（原来完全没有限幅）
+- 新增 `GIMBAL_IMU_ON_GIMBAL` 处理"IMU 装在云台还是底盘"这个前提
+
+**修掉小陀螺"卡一下"的真 bug**（原怀疑的 ±180° 经审计**不成立**）
+- `chassis_control.c` 小陀螺换向原来是 `(ch2 < 0) ? -spin_w : spin_w`，**没有死区**：
+  摇杆回中/漂移时 omega 会在 ±4 rad/s 之间 **1kHz 反复翻转** → 已改成**死区 + 磁滞保持上次方向**
+- 新增**自转角速度速率限制** `CHASSIS_W_SLEW=30 rad/s²`（原来全工程零速率限制）
+- 修配置矛盾：`CHASSIS_MAX_W` 3.0 会把 `CHASSIS_SPIN_W` 4.0 **静默钳掉**，改成 5.0
+- 跟随环跨 ±180° 时禁止积分（`head_ki>0` 时会出现"反向卡住不动"）
+
+**掉线可观测性**
+- 串口绘图模式 4 从 8 通道扩到 **10 通道**，新增 `online`（三电机反馈状态打包）
+  与 `ready`（摩擦轮是否到转速），可区分"电机真掉线"和"拨杆档位没识别"
+
+**其它**
+- `shooter.h` / `gimbal.h` 补上 `user_systick.h`，变成自包含头文件
+
+### V1.x
+- 从 A 板移植到 C 板；新增云台 pitch（GM6020 ID4 @CAN2，串级 + 增强 PID）、
+  射击机构（2×M3508 + 1×M2006 @CAN2，状态机 + FIR）、弹道解算（牛顿迭代）
+- 电机底层加固：首帧编码器基准保护、掉线保护、按电调型号区分电流满量程、过温降额
+- 串口绘图绘图模式可运行时切换（`plot_mode`）；CMSIS-DSP 只编译 7 个文件（644→89 编译单元）；
+  栈 1KB→2KB、堆 512B→1KB；开机音乐加总时长上限
+
+---
+
+## 十、文档
 
 | 文件 | 内容 |
 |---|---|

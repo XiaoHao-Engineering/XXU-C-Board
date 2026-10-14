@@ -42,10 +42,15 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
 /* 串口绘图通道：上电 = CHASSIS_SERIALPLOT_MODE，也能在线改（发 plot_mode=3#）*/
 static float s_plot_mode = (float)CHASSIS_SERIALPLOT_MODE;
 
+/* 小陀螺转向（带死区保持，避免摇杆回中时 1kHz 反复换向）+ 自转 omega 的速率限制状态 */
+static int8_t s_spin_dir = 1;
+static float  s_w_cmd = 0.0f;
+
 static void  Chassis_Apply_Wheel_Gain(void);
 static void  Chassis_Apply_Reverse(void);
 static void  Chassis_Apply_Friction_Gain(void);
 static void  Chassis_Apply_Plot_Mode(void);
+static float Chassis_Slew_Omega(float target);
 static int16_t RC_Channel(uint8_t ch);
 static float Chassis_Spin_Omega(void);
 static float Stick(int16_t value);
@@ -99,10 +104,38 @@ static int16_t RC_Channel(const uint8_t ch) {
 
 static float Chassis_Spin_Omega(void) {
     if (s_mode == CHASSIS_MODE_SPIN) {
-        /* 方向由左手水平决定，不推默认逆时针 */
-        return (RC_Channel(CHASSIS_SPIN_DIR_CH) < 0) ? -s_spin_w : s_spin_w;
+        /* ★★ 必须带死区 + 磁滞保持上次方向。
+           原来写的是 `(RC_Channel(...) < 0) ? -s_spin_w : s_spin_w` —— 没有死区，
+           摇杆回中/漂移时 ch2 在 0 附近抖一下，omega 就会在 ±spin_w 之间
+           【1kHz 反复翻转】。底盘指令跟着正负横跳，表现就是小陀螺"卡一下"。 */
+        const int16_t dir_ch = RC_Channel(CHASSIS_SPIN_DIR_CH);
+        const int16_t dead = (int16_t)s_dead;
+        if (dir_ch > dead) {
+            s_spin_dir = 1;
+        } else if (dir_ch < -dead) {
+            s_spin_dir = -1;
+        }
+        return (float)s_spin_dir * s_spin_w;
     }
     return Stick(RC_Channel(CHASSIS_RC_W_CH)) * CHASSIS_MAX_W;
+}
+
+/* 自转角速度速率限制：模式切换/换向时不让 omega 阶跃，避免"顿一下" */
+static float Chassis_Slew_Omega(const float target) {
+    /* 标准 C 的 #if 不允许浮点常量，所以这里用运行期判断（step<=0 即关闭限速）*/
+    const float step = CHASSIS_W_SLEW * (float)CHASSIS_PERIOD_MS * 0.001f;
+    if (step <= 0.0f) {
+        return target;
+    }
+
+    if (target > s_w_cmd + step) {
+        s_w_cmd += step;
+    } else if (target < s_w_cmd - step) {
+        s_w_cmd -= step;
+    } else {
+        s_w_cmd = target;
+    }
+    return s_w_cmd;
 }
 
 static float Stick(const int16_t value) {
@@ -139,15 +172,19 @@ static void Chassis_Apply_Plot_Mode(void) {
             break;
 
         case 4:
-            /* 射击机构调试（8 通道）：frpm 摩擦轮实测 | frpm_f 滤波后 | frpm_t 目标转速 |
+            /* 射击机构调试（10 通道）：frpm 摩擦轮实测 | frpm_f 滤波后 | frpm_t 目标转速 |
                ferr 拨弹轮位置误差 | fcur 滤波后电流 | bpitch 解算俯仰角 | bv0 弹丸初速 |
-               fstate 状态机(0=STOP 1=SPINUP 2=FIRE 3=REVERSE) */
-            Serialplot_Set_Data(&user_serialplot, 8,
+               fstate 状态机(0=STOP 1=SPINUP 2=FIRE 3=REVERSE) |
+               online 三电机反馈状态 bit0=左轮 bit1=右轮 bit2=拨弹轮 | ready 摩擦轮是否到转速
+               ★ 排查掉线：fstate 会变(1/2) 但 online=0 -> 电机真没反馈；
+                           fstate 恒为 0 -> 遥控 sw2 档位没被识别 */
+            Serialplot_Set_Data(&user_serialplot, 10,
                                 &user_shooter.friction_rpm, &user_shooter.friction_rpm_filt,
                                 &user_shooter.fire_rpm,
                                 &user_shooter.feeder_err, &user_shooter.feeder_current_filt,
                                 &user_shooter.ballistics.pitch_deg, &user_shooter.ballistics.v0,
-                                &user_shooter.state_f);
+                                &user_shooter.state_f,
+                                &user_shooter.online_mask, &user_shooter.ready_f);
             break;
 
         case 2:
@@ -250,6 +287,9 @@ void ChassisControl_Update(void) {
             s_mode = CHASSIS_MODE_FOLLOW;
         } else if (s_dbus->sw1 == 2) {
             s_mode = CHASSIS_MODE_SPIN;
+            /* 进小陀螺时锁存一次转向，避免刚进入时 ch2 抖一下就反着转 */
+            s_spin_dir = (RC_Channel(CHASSIS_SPIN_DIR_CH) < -(int16_t)s_dead) ? -1 : 1;
+            s_w_cmd = 0.0f;
         } else {
             s_mode = CHASSIS_MODE_MANUAL;
         }
@@ -280,7 +320,10 @@ void ChassisControl_Update(void) {
     if (s_mode == CHASSIS_MODE_FOLLOW) {
         /* 比例项：夹角 theta -> 0；D 项固定为 0（theta 在 ±180 处跳变，微分会出尖峰） */
         s_heading_pid.kp = s_head_kp;
-        s_heading_pid.ki = s_head_ki;
+        /* ★ theta 跨 ±180° 时禁止积分：否则 |theta|≈180 期间积分被顶到 max_iout，
+           翻过 180 之后积分会以【旧符号】顶住新方向的 P 项，表现为"反向时卡住不动"。
+           默认 s_head_ki=0 所以原本不发作，但一旦在线把 head_ki 调大就会踩到。 */
+        s_heading_pid.ki = (fabsf(Heading()) < 90.0f) ? s_head_ki : 0.0f;
         s_heading_pid.kd = 0.0f;
         PID_Set_Target(&s_heading_pid, Heading());
         omega = PID_Calculate(&s_heading_pid, 0.0f, 0.0f);
@@ -303,7 +346,7 @@ void ChassisControl_Update(void) {
 
     omega *= s_omega_dir;
 
-    Chassis_Set_Velocity(s_chassis, vx_body, vy_body, omega);
+    Chassis_Set_Velocity(s_chassis, vx_body, vy_body, Chassis_Slew_Omega(omega));
     Chassis_Update(s_chassis);
 }
 
@@ -335,7 +378,9 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"plot_mode",  &s_plot_mode,   0.0f,   4.0f,  Chassis_Apply_Plot_Mode},
     {"test_wheel", &s_test_wheel, -4.0f, 4.0f,   NULL},
     {"test_rpm",   &s_test_rpm,    0.0f, 3000.0f, NULL},
-    {"spin_w",   &s_spin_w,   0.0f,  20.0f,  NULL},
+    /* ⚠️ 上限必须是 CHASSIS_MAX_W：Chassis_Set_Velocity 里有幅值钳位，
+       填得比它大只会让人以为调了有用 */
+    {"spin_w",   &s_spin_w,   0.0f,  CHASSIS_MAX_W,  NULL},
     {"omega_dir",&s_omega_dir,-1.0f,   1.0f,  NULL},
     {"dead",     &s_dead,     0.0f, 100.0f,  NULL},
     {"head_kp",  &s_head_kp,  0.0f, 100.0f,  NULL},
@@ -353,6 +398,7 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"gimbal_ch",   &user_gimbal.rc_ch, 0.0f, 3.0f, NULL},
     {"gimbal_max_w", &user_gimbal.max_w, 0.0f, 30.0f, NULL},
     {"gimbal_world_kp", &user_gimbal.world_kp, 0.0f, 50.0f, NULL},
+    {"gimbal_world_kd", &user_gimbal.world_kd, 0.0f, 2.0f, NULL},
     {"gimbal_ff",  &user_gimbal.ff_gain, 0.0f, 1.0f, NULL},
     /* ---- PID 测试波形（调内环用）：wave_en=1 后波形直接当转速指令，绕过外环
        wave_type: 0=HOLD 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE 5=SAW */

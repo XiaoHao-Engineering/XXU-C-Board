@@ -71,7 +71,12 @@ MODE_NAMES = {
     #     frpm 原始转速 / frpm_f 滤波后 / frpm_t 目标 / ferr 拨弹轮位置误差
     #     fcur 拨弹轮滤波后电流 / bpitch 弹道解算角 / bv0 解算用初速
     #     fstate 状态机 0=STOP 1=SPINUP 2=FIRE 3=REVERSE
-    4: ["frpm", "frpm_f", "frpm_t", "ferr", "fcur", "bpitch", "bv0", "fstate"],
+    #     online 三个电机反馈状态：bit0=左轮 bit1=右轮 bit2=拨弹轮（0=都没反馈）
+    #     ready  摩擦轮是否已到转速（1=允许拨弹）
+    #   ★ 排查掉线：fstate 会变(1/2) 但 online=0 -> 电机真没反馈；
+    #               fstate 恒为 0 -> 遥控 sw2 档位没被识别
+    4: ["frpm", "frpm_f", "frpm_t", "ferr", "fcur", "bpitch", "bv0", "fstate",
+        "online", "ready"],
 }
 
 DEFAULT_MODE = 2        # 和固件 chassis_config.h 的 CHASSIS_SERIALPLOT_MODE 一致

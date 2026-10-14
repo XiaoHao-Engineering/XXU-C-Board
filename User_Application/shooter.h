@@ -3,6 +3,7 @@
 
 #include "main.h"
 #include "shooter_config.h"
+#include "../User_Architect/user_systick.h"
 #include "../User_Drives/User_Motor/user_dji_motor.h"
 #include "../User_Algorithm/User_Controller/user_pid.h"
 #include "../User_Algorithm/User_Controller/user_cascade.h"
@@ -61,6 +62,13 @@ typedef struct {
     /* 状态机 float 镜像：枚举进不了串口绘图的 float* 通道表
        （0=STOP 1=SPINUP 2=FIRE 3=REVERSE）*/
     float state_f;
+    /* 观察用镜像（排查"电机到底有没有反馈"）：
+       online_mask 的 bit0=摩擦轮左 bit1=摩擦轮右 bit2=拨弹轮，对应位为 1 表示该电机有反馈；
+       ready_f 是 is_ready 的 float 镜像。
+       ★ 排查方法：fstate 会变(1/2) 但 online_mask=0 -> 电机真掉线；
+                   fstate 恒为 0 -> 遥控 sw2 没被识别（档位不在单发/连发位）。*/
+    float online_mask;
+    float ready_f;
 
     float fire_rpm;
     float step_dial_deg;             /* 一步走多少【拨盘】角度 deg（内部×减速比换算成转子角）*/

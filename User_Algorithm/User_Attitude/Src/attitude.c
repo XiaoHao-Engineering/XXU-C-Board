@@ -24,6 +24,7 @@ void Attitude_Init(ATTITUDE_DRIVES* attitude, BMI088_DRIVES* user_bmi088, const 
     attitude->yaw_gyro = 0.0f;
     attitude->pitch = 0.0f;
     attitude->yaw = 0.0f;
+    attitude->yaw_rate = 0.0f;
     attitude->yaw_offset = 0.0f;
     attitude->update_cnt = 0;
 
@@ -46,6 +47,10 @@ float Attitude_Get_Pitch(const ATTITUDE_DRIVES* attitude) {
 
 float Attitude_Get_Yaw(const ATTITUDE_DRIVES* attitude) {
     return attitude->yaw;
+}
+
+float Attitude_Get_Yaw_Rate(const ATTITUDE_DRIVES* attitude) {
+    return attitude->yaw_rate;
 }
 
 /* 私有函数 */
@@ -78,6 +83,7 @@ static void Attitude_Update(void* arg) {
         /* 偏航：先把机体 z 轴转速按俯仰投影回世界垂直轴，再积分 */
         const float pitch_rad = attitude->pitch * ATTITUDE_DEG2RAD;
         const float yaw_rate = gz * cosf(pitch_rad) - gx * sinf(pitch_rad);
+        attitude->yaw_rate = yaw_rate;      /* 暴露给云台做阻尼（原来算完就丢了）*/
         attitude->yaw_gyro += yaw_rate * dt;
 
         if (attitude->yaw_gyro >= 360.0f || attitude->yaw_gyro <= -360.0f) {
