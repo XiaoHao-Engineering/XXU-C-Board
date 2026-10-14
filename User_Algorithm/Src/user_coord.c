@@ -1,0 +1,540 @@
+/* 包含头文件 */
+#include "../user_coord.h"
+#include <math.h>
+
+/* 笛卡尔坐标运算函数 */
+float Distance_Cartesian(const CartesianCoord_Point* p1, const CartesianCoord_Point* p2) {
+    float sum;
+    float diff[3] = {p2->x - p1->x, p2->y - p1->y, p2->z - p1->z};
+    arm_dot_prod_f32(diff, diff, 3, &sum);
+    return sqrtf(sum);
+}
+
+float Magnitude_Cartesian(const CartesianCoord_Point* point) {
+    float sum;
+    float vec[3] = {point->x, point->y, point->z};
+    arm_dot_prod_f32(vec, vec, 3, &sum);
+    return sqrtf(sum);
+}
+
+void Normalize_Cartesian(const CartesianCoord_Point* point, CartesianCoord_Point* result) {
+    float mag_sq;
+    float vec[3] = {point->x, point->y, point->z};
+    arm_dot_prod_f32(vec, vec, 3, &mag_sq);
+
+    if (mag_sq < PRECISION_SQ) {
+        result->x = result->y = result->z = 0.0f;
+    } else {
+        const float inv_mag = FastInvSqrt(mag_sq);
+        result->x = point->x * inv_mag;
+        result->y = point->y * inv_mag;
+        result->z = point->z * inv_mag;
+    }
+}
+
+float AngleDifference_Cartesian(const CartesianCoord_Point* p1, const CartesianCoord_Point* p2) {
+    float mag1_sq, mag2_sq, dot;
+
+    float v1[3] = {p1->x, p1->y, p1->z};
+    float v2[3] = {p2->x, p2->y, p2->z};
+
+    arm_dot_prod_f32(v1, v1, 3, &mag1_sq);
+    arm_dot_prod_f32(v2, v2, 3, &mag2_sq);
+    
+    if (mag1_sq < PRECISION_SQ || mag2_sq < PRECISION_SQ) {
+        return 0.0f;
+    }
+    
+    arm_dot_prod_f32(v1, v2, 3, &dot);
+    float cos_angle = dot * FastInvSqrt(mag1_sq * mag2_sq);
+
+    // 限制在[-1, 1]范围内
+    if (cos_angle >  1.0f) cos_angle =  1.0f;
+    if (cos_angle < -1.0f) cos_angle = -1.0f;
+
+    return Math_Rad2Deg(acosf(cos_angle));
+}
+
+void CrossProduct_Cartesian(const CartesianCoord_Point* p1, const CartesianCoord_Point* p2, CartesianCoord_Point* result) {
+    result->x = p1->y * p2->z - p1->z * p2->y;
+    result->y = p1->z * p2->x - p1->x * p2->z;
+    result->z = p1->x * p2->y - p1->y * p2->x;
+}
+
+void Project_Cartesian(const CartesianCoord_Point* point, const CartesianCoord_Point* onto, CartesianCoord_Point* result) {
+    float v1[3] = {point->x, point->y, point->z};
+    float v2[3] = {onto->x, onto->y, onto->z};
+    float dot, onto_mag_sq;
+
+    arm_dot_prod_f32(v1, v2, 3, &dot);
+    arm_dot_prod_f32(v2, v2, 3, &onto_mag_sq);
+
+    if (onto_mag_sq < PRECISION_SQ) {
+        result->x = result->y = result->z = 0.0f;
+    } else {
+        const float scale = dot / onto_mag_sq;
+        result->x = onto->x * scale;
+        result->y = onto->y * scale;
+        result->z = onto->z * scale;
+    }
+}
+
+void Lerp_Cartesian(const CartesianCoord_Point* p1, const CartesianCoord_Point* p2, float t, CartesianCoord_Point* result) {
+    result->x = p1->x + t * (p2->x - p1->x);
+    result->y = p1->y + t * (p2->y - p1->y);
+    result->z = p1->z + t * (p2->z - p1->z);
+}
+
+/* 极坐标运算函数 */
+
+void Normalize_Polar(const PolarCoord_Point* point, PolarCoord_Point* result) {
+    result->radius = fabsf(point->radius);
+    result->yaw = Math_WrapAngleDeg(point->yaw);
+    result->pitch = Math_WrapAngleDeg(point->pitch);
+}
+
+void Add_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2, PolarCoord_Point* result) {
+    CartesianCoord_Point c1, c2, c_result;
+
+    PolarToCartesian(p1, &c1);
+    PolarToCartesian(p2, &c2);
+    Add_Cartesian(&c1, &c2, &c_result);
+    CartesianToPolar(&c_result, result);
+}
+
+void Subtract_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2, PolarCoord_Point* result) {
+    CartesianCoord_Point c1, c2, c_result;
+
+    PolarToCartesian(p1, &c1);
+    PolarToCartesian(p2, &c2);
+    Subtract_Cartesian(&c1, &c2, &c_result);
+    CartesianToPolar(&c_result, result);
+}
+
+void Scale_Polar(const PolarCoord_Point* point, float scale, PolarCoord_Point* result) {
+    result->radius = point->radius * scale;
+    result->yaw = point->yaw;
+    result->pitch = point->pitch;
+}
+
+float Distance_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2) {
+    CartesianCoord_Point c1, c2;
+
+    PolarToCartesian(p1, &c1);
+    PolarToCartesian(p2, &c2);
+
+    return Distance_Cartesian(&c1, &c2);
+}
+
+float AbsAngleDifference_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2) {
+    const float yaw_diff = Math_WrapAngleDeg(p2->yaw - p1->yaw);
+    const float pitch_diff = Math_WrapAngleDeg(p2->pitch - p1->pitch);
+
+    return sqrtf(yaw_diff * yaw_diff + pitch_diff * pitch_diff);
+}
+
+float YawDifference_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2) {
+    return Math_WrapAngleDeg(p2->yaw - p1->yaw);
+}
+
+float PitchDifference_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2) {
+    return Math_WrapAngleDeg(p2->pitch - p1->pitch);
+}
+
+void Lerp_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2, float t, PolarCoord_Point* result) {
+    result->radius = p1->radius + t * (p2->radius - p1->radius);
+
+    // 角度插值考虑最短路径
+    const float yaw_diff = Math_WrapAngleDeg(p2->yaw - p1->yaw);
+    const float pitch_diff = Math_WrapAngleDeg(p2->pitch - p1->pitch);
+
+    result->yaw = Math_WrapAngleDeg(p1->yaw + t * yaw_diff);
+    result->pitch = Math_WrapAngleDeg(p1->pitch + t * pitch_diff);
+}
+
+float DotProduct_Polar(const PolarCoord_Point* p1, const PolarCoord_Point* p2) {
+    const float pitch_diff_rad = Math_Deg2Rad(p2->pitch - p1->pitch);
+    const float yaw_diff_rad   = Math_Deg2Rad(Math_WrapAngleDeg(p2->yaw - p1->yaw));
+
+    float sin_pitch_diff, cos_pitch_diff;
+    float sin_yaw_diff,   cos_yaw_diff;
+    arm_sin_cos_f32(pitch_diff_rad, &sin_pitch_diff, &cos_pitch_diff);
+    arm_sin_cos_f32(yaw_diff_rad,   &sin_yaw_diff,   &cos_yaw_diff);
+
+    float sin_p1, cos_p1, sin_p2, cos_p2;
+    arm_sin_cos_f32(Math_Deg2Rad(p1->pitch), &sin_p1, &cos_p1);
+    arm_sin_cos_f32(Math_Deg2Rad(p2->pitch), &sin_p2, &cos_p2);
+
+    return p1->radius * p2->radius * (cos_pitch_diff * cos_yaw_diff + sin_p1 * sin_p2);
+}
+
+/* 坐标系转换函数 */
+
+void CartesianToPolar(const CartesianCoord_Point* cartesian_point, PolarCoord_Point* result) {
+    const float x = cartesian_point->x;
+    const float y = cartesian_point->y;
+    const float z = cartesian_point->z;
+
+    const float x_sq = x * x;
+    const float y_sq = y * y;
+    const float z_sq = z * z;
+    
+    result->radius = sqrtf(x_sq + y_sq + z_sq);
+    result->yaw = Math_Rad2Deg(atan2f(y, x));
+    
+    const float horizontal_dist = sqrtf(x_sq + y_sq);
+    result->pitch = Math_Rad2Deg(atan2f(z, horizontal_dist));
+}
+
+void PolarToCartesian(const PolarCoord_Point* polar_point, CartesianCoord_Point* result) {
+    float cos_pitch, sin_pitch, cos_yaw, sin_yaw;
+    arm_sin_cos_f32(polar_point->pitch, &sin_pitch, &cos_pitch);
+    arm_sin_cos_f32(polar_point->yaw, &sin_yaw, &cos_yaw);
+
+    const float r_cos_pitch = polar_point->radius * cos_pitch;
+    result->x = r_cos_pitch * cos_yaw;
+    result->y = r_cos_pitch * sin_yaw;
+    result->z = polar_point->radius * sin_pitch;
+}
+
+/* 坐标旋转函数 */
+
+void RotateX_Cartesian(const CartesianCoord_Point* point, const float angle_deg, CartesianCoord_Point* result) {
+    float cos_a, sin_a;
+    arm_sin_cos_f32(angle_deg, &sin_a, &cos_a);
+
+    const float y = point->y;
+    const float z = point->z;
+
+    result->x = point->x;
+    result->y = y * cos_a - z * sin_a;
+    result->z = y * sin_a + z * cos_a;
+}
+
+void RotateY_Cartesian(const CartesianCoord_Point* point, const float angle_deg, CartesianCoord_Point* result) {
+    float cos_a, sin_a;
+    arm_sin_cos_f32(angle_deg, &sin_a, &cos_a);
+
+    
+    const float x = point->x;
+    const float z = point->z;
+    
+    result->x = x * cos_a + z * sin_a;
+    result->y = point->y;
+    result->z = -x * sin_a + z * cos_a;
+}
+
+void RotateZ_Cartesian(const CartesianCoord_Point* point, const float angle_deg, CartesianCoord_Point* result) {
+    float cos_a, sin_a;
+    arm_sin_cos_f32(angle_deg, &sin_a, &cos_a);
+    
+    const float x = point->x;
+    const float y = point->y;
+    
+    result->x = x * cos_a - y * sin_a;
+    result->y = x * sin_a + y * cos_a;
+    result->z = point->z;
+}
+
+void RotateByMatrix_Cartesian(const CartesianCoord_Point* point, const RotationMatrix* matrix, 
+                              CartesianCoord_Point* result) {
+    result->x = matrix->m[0][0] * point->x + matrix->m[0][1] * point->y + matrix->m[0][2] * point->z;
+    result->y = matrix->m[1][0] * point->x + matrix->m[1][1] * point->y + matrix->m[1][2] * point->z;
+    result->z = matrix->m[2][0] * point->x + matrix->m[2][1] * point->y + matrix->m[2][2] * point->z;
+}
+
+void RotateByQuaternion_Cartesian(const CartesianCoord_Point* point, const Quaternion* quat, 
+                                  CartesianCoord_Point* result) {
+    const float qx = quat->x;
+    const float qy = quat->y;
+    const float qz = quat->z;
+    const float qw = quat->w;
+    
+    const float px = point->x;
+    const float py = point->y;
+    const float pz = point->z;
+    
+    const float tx = 2.0f * (qy * pz - qz * py);
+    const float ty = 2.0f * (qz * px - qx * pz);
+    const float tz = 2.0f * (qx * py - qy * px);
+    
+    result->x = px + qw * tx + (qy * tz - qz * ty);
+    result->y = py + qw * ty + (qz * tx - qx * tz);
+    result->z = pz + qw * tz + (qx * ty - qy * tx);
+}
+
+/* 四元数运算函数 */
+
+void Quaternion_Identity(Quaternion* quat) {
+    quat->w = 1.0f;
+    quat->x = 0.0f;
+    quat->y = 0.0f;
+    quat->z = 0.0f;
+}
+
+void Quaternion_FromAxisAngle(const CartesianCoord_Point* axis, float angle_deg, Quaternion* quat) {
+    float sin_half, cos_half;
+    arm_sin_cos_f32(angle_deg * 0.5f, &sin_half, &cos_half);
+    
+    CartesianCoord_Point normalized_axis;
+    Normalize_Cartesian(axis, &normalized_axis);
+    
+    quat->w = cos_half;
+    quat->x = normalized_axis.x * sin_half;
+    quat->y = normalized_axis.y * sin_half;
+    quat->z = normalized_axis.z * sin_half;
+}
+
+void Quaternion_FromEuler(const EulerAngles* euler, Quaternion* quat) {
+    float cr, sr, cp, sp, cy, sy;
+    arm_sin_cos_f32(euler->roll  * 0.5f, &sr, &cr);
+    arm_sin_cos_f32(euler->pitch * 0.5f, &sp, &cp);
+    arm_sin_cos_f32(euler->yaw   * 0.5f, &sy, &cy);
+    
+    quat->w = cr * cp * cy + sr * sp * sy;
+    quat->x = sr * cp * cy - cr * sp * sy;
+    quat->y = cr * sp * cy + sr * cp * sy;
+    quat->z = cr * cp * sy - sr * sp * cy;
+}
+
+void Quaternion_ToEuler(const Quaternion* quat, EulerAngles* euler) {
+    const float sinr_cosp = 2.0f * (quat->w * quat->x + quat->y * quat->z);
+    const float cosr_cosp = 1.0f - 2.0f * (quat->x * quat->x + quat->y * quat->y);
+    euler->roll = Math_Rad2Deg(atan2f(sinr_cosp, cosr_cosp));
+    
+    const float sinp = 2.0f * (quat->w * quat->y - quat->z * quat->x);
+    if (fabsf(sinp) >= 1.0f) {
+        euler->pitch = copysignf(90.0f, sinp);
+    } else {
+        euler->pitch = Math_Rad2Deg(asinf(sinp));
+    }
+    
+    const float siny_cosp = 2.0f * (quat->w * quat->z + quat->x * quat->y);
+    const float cosy_cosp = 1.0f - 2.0f * (quat->y * quat->y + quat->z * quat->z);
+    euler->yaw = Math_Rad2Deg(atan2f(siny_cosp, cosy_cosp));
+}
+
+void Quaternion_Multiply(const Quaternion* q1, const Quaternion* q2, Quaternion* result) {
+    result->w = q1->w * q2->w - q1->x * q2->x - q1->y * q2->y - q1->z * q2->z;
+    result->x = q1->w * q2->x + q1->x * q2->w + q1->y * q2->z - q1->z * q2->y;
+    result->y = q1->w * q2->y - q1->x * q2->z + q1->y * q2->w + q1->z * q2->x;
+    result->z = q1->w * q2->z + q1->x * q2->y - q1->y * q2->x + q1->z * q2->w;
+}
+
+void Quaternion_Conjugate(const Quaternion* quat, Quaternion* result) {
+    result->w = quat->w;
+    result->x = -quat->x;
+    result->y = -quat->y;
+    result->z = -quat->z;
+}
+
+float Quaternion_Magnitude(const Quaternion* quat) {
+    return sqrtf(quat->w * quat->w + quat->x * quat->x + quat->y * quat->y + quat->z * quat->z);
+}
+
+void Quaternion_Normalize(const Quaternion* quat, Quaternion* result) {
+    const float mag = Quaternion_Magnitude(quat);
+    if (mag < PRECISION) {
+        Quaternion_Identity(result);
+    } else {
+        const float inv_mag = 1.0f / mag;
+        result->w = quat->w * inv_mag;
+        result->x = quat->x * inv_mag;
+        result->y = quat->y * inv_mag;
+        result->z = quat->z * inv_mag;
+    }
+}
+
+void Quaternion_Slerp(const Quaternion* q1, const Quaternion* q2, float t, Quaternion* result) {
+    if (t <= 0.0f) {
+        *result = *q1;
+        return;
+    }
+    if (t >= 1.0f) {
+        *result = *q2;
+        return;
+    }
+    
+    float q1_vec[4] = {q1->w, q1->x, q1->y, q1->z};
+    float q2_vec[4] = {q2->w, q2->x, q2->y, q2->z};
+    float dot;
+    arm_dot_prod_f32(q1_vec, q2_vec, 4, &dot);
+    
+    Quaternion q2_copy = *q2;
+    if (dot < 0.0f) {
+        q2_copy.w = -q2_copy.w;
+        q2_copy.x = -q2_copy.x;
+        q2_copy.y = -q2_copy.y;
+        q2_copy.z = -q2_copy.z;
+        dot = -dot;
+    }
+    
+    if (dot > 0.9995f) {
+        result->w = q1->w + t * (q2_copy.w - q1->w);
+        result->x = q1->x + t * (q2_copy.x - q1->x);
+        result->y = q1->y + t * (q2_copy.y - q1->y);
+        result->z = q1->z + t * (q2_copy.z - q1->z);
+        Quaternion_Normalize(result, result);
+        return;
+    }
+    
+    const float theta = acosf(dot);
+    const float sin_theta = arm_sin_f32(theta);
+    const float sin_t1 = arm_sin_f32((1.0f - t) * theta);
+    const float sin_t2 = arm_sin_f32(t * theta);
+    
+    const float w1 = sin_t1 / sin_theta;
+    const float w2 = sin_t2 / sin_theta;
+    
+    result->w = q1->w * w1 + q2_copy.w * w2;
+    result->x = q1->x * w1 + q2_copy.x * w2;
+    result->y = q1->y * w1 + q2_copy.y * w2;
+    result->z = q1->z * w1 + q2_copy.z * w2;
+}
+
+/* 旋转矩阵运算函数 */
+
+void RotationMatrix_Identity(RotationMatrix* matrix) {
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            matrix->m[i][j] = (i == j) ? 1.0f : 0.0f;
+        }
+    }
+}
+
+void RotationMatrix_FromEuler(const EulerAngles* euler, RotationMatrix* matrix) {
+    float cr, sr, cp, sp, cy, sy;
+    arm_sin_cos_f32(euler->roll, &sr, &cr);
+    arm_sin_cos_f32(euler->pitch, &sp, &cp);
+    arm_sin_cos_f32(euler->yaw, &sy, &cy);
+    
+    matrix->m[0][0] = cy * cp;
+    matrix->m[0][1] = cy * sp * sr - sy * cr;
+    matrix->m[0][2] = cy * sp * cr + sy * sr;
+    
+    matrix->m[1][0] = sy * cp;
+    matrix->m[1][1] = sy * sp * sr + cy * cr;
+    matrix->m[1][2] = sy * sp * cr - cy * sr;
+    
+    matrix->m[2][0] = -sp;
+    matrix->m[2][1] = cp * sr;
+    matrix->m[2][2] = cp * cr;
+}
+
+void RotationMatrix_FromQuaternion(const Quaternion* quat, RotationMatrix* matrix) {
+    const float qw = quat->w;
+    const float qx = quat->x;
+    const float qy = quat->y;
+    const float qz = quat->z;
+
+    const float qx2 = qx * qx;
+    const float qy2 = qy * qy;
+    const float qz2 = qz * qz;
+    
+    matrix->m[0][0] = 1.0f - 2.0f * (qy2 + qz2);
+    matrix->m[0][1] = 2.0f * (qx * qy - qw * qz);
+    matrix->m[0][2] = 2.0f * (qx * qz + qw * qy);
+    
+    matrix->m[1][0] = 2.0f * (qx * qy + qw * qz);
+    matrix->m[1][1] = 1.0f - 2.0f * (qx2 + qz2);
+    matrix->m[1][2] = 2.0f * (qy * qz - qw * qx);
+    
+    matrix->m[2][0] = 2.0f * (qx * qz - qw * qy);
+    matrix->m[2][1] = 2.0f * (qy * qz + qw * qx);
+    matrix->m[2][2] = 1.0f - 2.0f * (qx2 + qy2);
+}
+
+void RotationMatrix_ToQuaternion(const RotationMatrix* matrix, Quaternion* quat) {
+    const float trace = matrix->m[0][0] + matrix->m[1][1] + matrix->m[2][2];
+    
+    if (trace > 0.0f) {
+        const float s = sqrtf(trace + 1.0f) * 2.0f;
+        quat->w = 0.25f * s;
+        quat->x = (matrix->m[2][1] - matrix->m[1][2]) / s;
+        quat->y = (matrix->m[0][2] - matrix->m[2][0]) / s;
+        quat->z = (matrix->m[1][0] - matrix->m[0][1]) / s;
+    } else if ((matrix->m[0][0] > matrix->m[1][1]) && (matrix->m[0][0] > matrix->m[2][2])) {
+        const float s = sqrtf(1.0f + matrix->m[0][0] - matrix->m[1][1] - matrix->m[2][2]) * 2.0f;
+        quat->w = (matrix->m[2][1] - matrix->m[1][2]) / s;
+        quat->x = 0.25f * s;
+        quat->y = (matrix->m[0][1] + matrix->m[1][0]) / s;
+        quat->z = (matrix->m[0][2] + matrix->m[2][0]) / s;
+    } else if (matrix->m[1][1] > matrix->m[2][2]) {
+        const float s = sqrtf(1.0f + matrix->m[1][1] - matrix->m[0][0] - matrix->m[2][2]) * 2.0f;
+        quat->w = (matrix->m[0][2] - matrix->m[2][0]) / s;
+        quat->x = (matrix->m[0][1] + matrix->m[1][0]) / s;
+        quat->y = 0.25f * s;
+        quat->z = (matrix->m[1][2] + matrix->m[2][1]) / s;
+    } else {
+        const float s = sqrtf(1.0f + matrix->m[2][2] - matrix->m[0][0] - matrix->m[1][1]) * 2.0f;
+        quat->w = (matrix->m[1][0] - matrix->m[0][1]) / s;
+        quat->x = (matrix->m[0][2] + matrix->m[2][0]) / s;
+        quat->y = (matrix->m[1][2] + matrix->m[2][1]) / s;
+        quat->z = 0.25f * s;
+    }
+}
+
+void RotationMatrix_Multiply(const RotationMatrix* m1, const RotationMatrix* m2, RotationMatrix* result) {
+    RotationMatrix temp;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            temp.m[i][j] = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                temp.m[i][j] += m1->m[i][k] * m2->m[k][j];
+            }
+        }
+    }
+    *result = temp;
+}
+
+void RotationMatrix_Transpose(const RotationMatrix* matrix, RotationMatrix* result) {
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            result->m[i][j] = matrix->m[j][i];
+        }
+    }
+}
+
+/* 欧拉角运算函数 */
+
+void EulerAngles_FromQuaternion(const Quaternion* quat, EulerAngles* euler) {
+    Quaternion_ToEuler(quat, euler);
+}
+
+void EulerAngles_FromRotationMatrix(const RotationMatrix* matrix, EulerAngles* euler) {
+    euler->pitch = Math_Rad2Deg(asinf(-matrix->m[2][0]));
+    
+    if (fabsf(matrix->m[2][0]) < 0.99999f) {
+        euler->yaw = Math_Rad2Deg(atan2f(matrix->m[1][0], matrix->m[0][0]));
+        euler->roll = Math_Rad2Deg(atan2f(matrix->m[2][1], matrix->m[2][2]));
+    } else {
+        euler->yaw = Math_Rad2Deg(atan2f(-matrix->m[0][1], matrix->m[1][1]));
+        euler->roll = 0.0f;
+    }
+}
+
+void EulerAngles_Normalize(const EulerAngles* euler, EulerAngles* result) {
+    result->roll = Math_WrapAngleDeg(euler->roll);
+    result->pitch = Math_WrapAngleDeg(euler->pitch);
+    result->yaw = Math_WrapAngleDeg(euler->yaw);
+}
+
+/* 坐标系变换函数 */
+
+void TransformPoint_Cartesian(const CartesianCoord_Point* point, const CartesianCoord_Point* origin, 
+                              const RotationMatrix* rotation, CartesianCoord_Point* result) {
+    CartesianCoord_Point translated;
+    Subtract_Cartesian(point, origin, &translated);
+    RotateByMatrix_Cartesian(&translated, rotation, result);
+}
+
+void InverseTransformPoint_Cartesian(const CartesianCoord_Point* point, const CartesianCoord_Point* origin, 
+                                     const RotationMatrix* rotation, CartesianCoord_Point* result) {
+    RotationMatrix rotation_transpose;
+    RotationMatrix_Transpose(rotation, &rotation_transpose);
+    
+    CartesianCoord_Point rotated;
+    RotateByMatrix_Cartesian(point, &rotation_transpose, &rotated);
+    
+    Add_Cartesian(&rotated, origin, result);
+}

@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试 (ST-Link)",
+      "type": "stlinkgdbtarget",
+      "request": "launch",
+      "origin": "snippet",
+      "cwd": "${workspaceFolder}",
+      "preBuild": "",
+      "preLaunchTask": "编译",
+      "runEntry": "main",
+      "svdPath": "${workspaceFolder}/STM32F407.svd",
+      "imagesAndSymbols": [
+        {
+          "imageFileName": "${workspaceFolder}/build/XXU-RoboMaster-Sentry.elf"
+        }
+      ],
+      "serverInterface": "SWD",
+      "serverInterfaceFrequency": "Auto",
+      "serverCubeProgPath": "${env:LOCALAPPDATA}/stm32cube/bundles/programmer/2.23.0/bin",
+      "verbose": false,
+      "logFile": "${workspaceFolder}/gdbClient_log.txt",
+      "serverExe": "ST-LINK_gdbserver.exe",
+      "liveWatch": {
+        "enabled": false
+      },
+      "serverIncrementalFlashing": false,
+      "serverCwd": "${env:LOCALAPPDATA}/stm32cube/bundles/stlink-gdbserver/7.14.0+st.2/bin"
+    }
+  ]
+}

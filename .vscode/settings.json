@@ -1,0 +1,32 @@
+{
+  "// 说明": "先跑 tools\\setup_env.ps1 把工具链加进 PATH，然后这里的设置才生效",
+  "cmake.generator": "Ninja",
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "cmake.configureArgs": [
+    "-DCMAKE_BUILD_TYPE=Debug",
+    "-DCMAKE_COMMAND=cube-cmake"
+  ],
+  "cmake.buildArgs": ["-j", "8"],
+  "cmake.configureOnOpen": false,
+  "cmake.exportCompileCommandsFile": true,
+  "cmake.preferredGenerators": ["Ninja"],
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.intelliSenseMode": "gcc-arm",
+  "C_Cpp.default.cStandard": "c11",
+  "C_Cpp.default.cppStandard": "c++17",
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  "files.associations": {
+    "*.h": "c"
+  },
+  "terminal.integrated.env.windows": {
+    "PATH": "${env:LOCALAPPDATA}\\stm32cube\\bundles\\gnu-tools-for-stm32\\14.3.1+st.2\\bin;${env:LOCALAPPDATA}\\stm32cube\\bundles\\cmake\\4.3.1+st.1\\bin;${env:LOCALAPPDATA}\\stm32cube\\bundles\\ninja\\1.13.2+st.1\\bin;${env:LOCALAPPDATA}\\stm32cube\\bundles\\programmer\\2.23.0\\bin;${env:PATH}"
+  },
+  "stm32cube-ide-clangd.path": "cube",
+  "stm32cube-ide-clangd.arguments": [
+    "starm-clangd",
+    "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-gcc*",
+    "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-g++*"
+  ],
+  "cmake.cmakePath": "cube-cmake"
+}

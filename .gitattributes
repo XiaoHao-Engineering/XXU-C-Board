@@ -1,0 +1,35 @@
+# ============================================================================
+#  换行符策略
+#  仓库里统一存 LF（跨平台一致），检出到工作区也是 LF —— 嵌入式源码/链接脚本/
+#  汇编对 CRLF 敏感，统一 LF 最省事，也避免 git 满屏 "LF will be replaced by CRLF"。
+#  PowerShell 脚本按 Windows 惯例存 CRLF。
+# ============================================================================
+
+* text=auto eol=lf
+
+# Windows 脚本
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 明确按文本处理（避免被误判为二进制）
+*.c     text eol=lf
+*.h     text eol=lf
+*.s     text eol=lf
+*.S     text eol=lf
+*.ld    text eol=lf
+*.ioc   text eol=lf
+*.md    text eol=lf
+*.py    text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+
+# 明确的二进制（不要做任何换行转换）
+*.a     binary
+*.o     binary
+*.elf   binary
+*.hex   binary
+*.bin   binary
+*.docx  binary
+*.xlsx  binary
+*.svd   -text

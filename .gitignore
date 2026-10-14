@@ -1,0 +1,47 @@
+# ============================================================================
+#  XXU-RoboMaster-Sentry (C 板)  .gitignore
+# ============================================================================
+
+# ---- 构建产物（绝对不能提交：build/ 有 673 个文件约 10MB）----
+build/
+build_*/
+build-*/
+cmake-build-*/
+out/
+_baseline_tmp/
+
+# ---- 编译中间件与最终产物 ----
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.su
+*.d
+*.a.tmp
+
+# ---- 调试器 / 工具输出 ----
+*.log
+*_log.txt
+gdbClient_log.txt
+jlink_log.txt
+RTT*.txt
+JScope*.jscope
+
+# ---- 编辑器 / 操作系统杂物 ----
+.vscode/ipch/
+.vscode/*.log
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- Office 临时锁文件（docs 里生成 docx 时会冒出来）----
+~$*.docx
+~$*.xlsx
+
+# ---- 本地个人配置（想提交就删掉这几行）----
+# .vscode/settings.json

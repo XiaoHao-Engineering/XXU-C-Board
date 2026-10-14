@@ -1,0 +1,34 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "STM32F407",
+      "compilerPath": "arm-none-eabi-gcc",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "gcc-arm",
+      "defines": [
+        "DEBUG",
+        "USE_HAL_DRIVER",
+        "STM32F407xx",
+        "ARM_MATH_CM4",
+        "__FPU_PRESENT=1U"
+      ],
+      "includePath": [
+        "${workspaceFolder}/Core/Inc",
+        "${workspaceFolder}/Drivers/STM32F4xx_HAL_Driver/Inc",
+        "${workspaceFolder}/Drivers/STM32F4xx_HAL_Driver/Inc/Legacy",
+        "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32F4xx/Include",
+        "${workspaceFolder}/Drivers/CMSIS/Include",
+        "${workspaceFolder}/Drivers/CMSIS/DSP/Include",
+        "${workspaceFolder}/Drivers/CMSIS/DSP/PrivateInclude",
+        "${workspaceFolder}/SEGGER_RTT",
+        "${workspaceFolder}/User_Algorithm",
+        "${workspaceFolder}/User_Application",
+        "${workspaceFolder}/User_Architect",
+        "${workspaceFolder}/User_Drives",
+        "${workspaceFolder}/User_Lib"
+      ]
+    }
+  ]
+}

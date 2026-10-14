@@ -1,0 +1,80 @@
+#ifndef CHASSIS_CONFIG_H
+#define CHASSIS_CONFIG_H
+
+/* 底盘参数集中配置 新乡学院 RoboMaster 哨兵 */
+
+/* 底盘类型 ----------------------------------------------------------------*/
+#define CHASSIS_MECANUM   (0)   /* 麦轮 */
+#define CHASSIS_OMNI4     (1)   /* 四轮全向轮 */
+#define CHASSIS_TYPE      CHASSIS_MECANUM
+
+/* 机械参数 ----------------------------------------------------------------*/
+#define CHASSIS_WHEELBASE (0.300f)         /* 轴距 m */
+#define CHASSIS_TRACK     (0.300f)         /* 轮距 m */
+#define CHASSIS_WHEEL_R   (0.076f)         /* 轮半径 m */
+#define CHASSIS_RATIO     (3591.0f / 187.0f)   /* M3508 减速比 */
+
+/* 轮序 0=左前 1=右前 2=左后 3=右后；装反了把对应项改成 -1（本车左右镜像安装，翻右侧）*/
+#define CHASSIS_REV_FL    (1)
+#define CHASSIS_REV_FR    (-1)
+#define CHASSIS_REV_RL    (1)
+#define CHASSIS_REV_RR    (-1)
+
+/* 速度限幅 ----------------------------------------------------------------*/
+#define CHASSIS_MAX_VX    (2.0f)    /* m/s */
+#define CHASSIS_MAX_VY    (2.0f)    /* m/s */
+#define CHASSIS_MAX_W     (3.0f)    /* rad/s */
+
+/* 遥控器映射 --------------------------------------------------------------*/
+/* DBUS 通道号：0=右手水平 1=右手垂直 2=左手水平 3=左手垂直 */
+#define CHASSIS_RC_VX_CH  (3)       /* 前后：左摇杆垂直 */
+#define CHASSIS_RC_VY_CH  (2)       /* 左右：左摇杆水平 */
+#define CHASSIS_RC_W_CH   (0)       /* 手动模式原地旋转：右摇杆水平 */
+#define CHASSIS_SPIN_DIR_CH (2)     /* 小陀螺模式转向：左摇杆水平 */
+
+#define CHASSIS_RC_DEAD   (10)
+
+#define CHASSIS_SPIN_W    (4.0f)    /* 自转角速度 rad/s */
+
+/* 自转方向校正：轮子方向改过之后转反了就填 -1 ----------------------------*/
+#define CHASSIS_OMEGA_DIR (1.0f)
+
+/* 跟随 --------------------------------------------------------------------*/
+/* Kp 单位 rad/s per deg：0.05 让满量程偏差(180 度)对应 9 rad/s，落在 MAX=3 的限幅内
+   才是线性比例（30 那种取值只要偏 0.1 度就饱和，等于开关控制，必然来回振荡）*/
+#define CHASSIS_FOLLOW_KP (0.05f)
+#define CHASSIS_FOLLOW_KI (0.0f)
+/* Kd 是【底盘实测角速度】的阻尼系数（不是 theta 的微分）：omega = Kp*theta - Kd*omega_实测。
+   0.3 表示底盘满速 3rad/s 时抵消 0.9rad/s 的输出，能在到点前提前刹车；还摆加大、迟钝减小 */
+#define CHASSIS_FOLLOW_KD (0.3f)
+#define CHASSIS_FOLLOW_MAX (6.0f)
+
+/* 轮速 PID ----------------------------------------------------------------*/
+#define CHASSIS_SPEED_KP       (15.0f)
+#define CHASSIS_SPEED_KI       (0.15f)
+#define CHASSIS_SPEED_KD       (0.0f)
+#define CHASSIS_SPEED_MAX_OUT  (16384.0f)   /* 电流环满量程 */
+#define CHASSIS_SPEED_MAX_IOUT (4000.0f)
+
+#define CHASSIS_WHEEL_POWER_MAX (200.0f) /* 单轮功率上限 W */
+
+#define CHASSIS_PERIOD_MS   (1)     /* 底盘控制任务周期 ms */
+
+/* 串口绘图 / 在线调参 ------------------------------------------------------*/
+#define CHASSIS_SERIALPLOT_PERIOD_MS (10)   /* 上报周期 ms，10=100Hz */
+
+/* 航向补偿：1=按参考系方向行进（小陀螺走直线） ----------------------------*/
+/* 手动模式    -> 以【车头】为正方向（不补偿）；跟随/小陀螺 -> 以【云台指向】为正方向
+   （补偿）；要求云台锁住世界方向，见 gimbal.h 的 GIMBAL_LOCK_WORLD */
+#define CHASSIS_HEADING_COMP  (1)
+
+/* 航向源（云台）掉线保护 --------------------------------------------------*/
+/* 1=掉线时完全停车（最安全）；0=只停自转，平移仍可用（方便调试） */
+#define CHASSIS_SOURCE_LOST_STOP  (0)
+
+/* 串口绘图通道选择 --------------------------------------------------------*/
+/* 0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch) 3=云台pitch(6ch，顶重力看内环积分)
+   4=射击机构(8ch，看 FIR 滤波效果与卡弹判据) */
+#define CHASSIS_SERIALPLOT_MODE  (2)
+
+#endif /* CHASSIS_CONFIG_H */
