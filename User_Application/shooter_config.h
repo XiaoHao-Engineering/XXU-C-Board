@@ -32,19 +32,40 @@
 #define SHOOTER_FEEDER_SLOTS        (8)         /* 拨盘一圈几个弹位 */
 #define SHOOTER_FEEDER_STEP_DIAL_DEG (360.0f / (float)SHOOTER_FEEDER_SLOTS)
 
+/* ★★★ 拨盘转速的理论（"拨盘太慢"该调哪里看这里）---------------------------
+   一发要走的角度 = STEP_DIAL_DEG × GEAR = 45° × 36 = 1620°【转子角】= 4.5 圈转子。
+
+   它是位置串级：外环(角度->转速) 的输出就是【内环的转速目标 RPM】，而这个输出
+   被 ANGLE_MAX_OUT 限幅 —— 所以拨盘的最高转速 = ANGLE_MAX_OUT RPM（转子转速）：
+
+       一步最快耗时 = 1620 / (ANGLE_MAX_OUT × 6)   秒      （RPM × 6 = deg/s）
+
+   原来 ANGLE_MAX_OUT = 300：最高 300 RPM -> 一步 0.9 秒（≈1.1 发/秒）。
+   而 fire_interval_ms = 120ms 想要 8.3 发/秒 —— 伺服比节奏慢了 7.5 倍，
+   所以瓶颈完全在这个限幅上，fire_int 调多小都没用。
+
+   ⚠️ 因此：拨盘慢【不要去调 KP/KI】。外环在 1620° 的大误差下一直处于饱和状态
+      （kp=6 × 1620 = 9720 RPM 的需求，远超限幅），KP 大小根本体现不出来。
+      要快就抬 ANGLE_MAX_OUT（软件），或改减速比/减少槽数（机械）。
+
+   改成 2500：最高 2500 RPM -> 一步 0.108 秒，120ms 的节奏才真正生效
+   （实际还要算加减速，约 0.12~0.15s/发）。想更快就继续加，上限看电机发热与卡弹。 */
+#define SHOOTER_FEEDER_ANGLE_MAX_OUT  (2500.0f)
+#define SHOOTER_FEEDER_ANGLE_MAX_IOUT (100.0f)
+
 /* 拨弹轮串级 PID：外环 角度->转速（输出即内环转速目标 RPM），内环 转速->电流（C610 刻度 ±16384）*/
 #define SHOOTER_FEEDER_ANGLE_KP       (6.0f)
 #define SHOOTER_FEEDER_ANGLE_KI       (0.0f)
 #define SHOOTER_FEEDER_ANGLE_KD       (0.2f)
-#define SHOOTER_FEEDER_ANGLE_MAX_OUT  (300.0f)
-#define SHOOTER_FEEDER_ANGLE_MAX_IOUT (100.0f)
 
 #define SHOOTER_FEEDER_SPEED_KP       (8.0f)
 #define SHOOTER_FEEDER_SPEED_KI       (0.3f)
 #define SHOOTER_FEEDER_SPEED_KD       (0.0f)
 #define SHOOTER_FEEDER_SPEED_MAX_OUT  (10000.0f)
 #define SHOOTER_FEEDER_SPEED_MAX_IOUT (2000.0f)
-#define SHOOTER_FEEDER_POWER_MAX      (30.0f)
+/* 30W -> 45W：原来 30W/24V = 1.25A，C610 满量程 10A，拨盘加速时电流被掐得很死。
+   45W ≈ 1.9A，给加速留余量；仍然是保守值（C610 能到 10A），发热不对就往下调。 */
+#define SHOOTER_FEEDER_POWER_MAX      (45.0f)
 
 /* 遥控 sw2 档位（右拨杆，与底盘用的 sw1 分工）——【从上到下】：
      上(1) = 仅摩擦轮：摩擦轮起转到 fire_rpm，但【不拨弹】
@@ -64,9 +85,12 @@
 #define SHOOTER_FIRE_INTERVAL_MS    (120)
 
 /* 卡弹判据：位置没跟上 且 电流大，两条同时持续 JAM_MS 才判 ——
-   只看电流会被机构本身的机械冲击误触发。ERR 是转子角 deg，CURRENT 是 C610 刻度 */
+   只看电流会被机构本身的机械冲击误触发。ERR 是转子角 deg，CURRENT 是 C610 刻度。
+   ⚠️ CURRENT 必须【低于】功率限幅换算出来的可达到电流，否则卡弹永远判不出来：
+     45W / 24V = 1.9A，C610 满量程 10A -> 1.9/10×16384 ≈ 3100 刻度。
+     原来写 6000（=3.7A），已经超过功率限幅能达到的电流 -> 这个判据是死的，已改成 2500。 */
 #define SHOOTER_JAM_ERR_DEG         (30.0f)
-#define SHOOTER_JAM_CURRENT         (6000.0f)
+#define SHOOTER_JAM_CURRENT         (2500.0f)
 #define SHOOTER_JAM_MS              (150)
 #define SHOOTER_REVERSE_MS          (120)
 #define SHOOTER_REVERSE_SCALE       (-0.5f)     /* 反转步长比例（负号=往回走）*/

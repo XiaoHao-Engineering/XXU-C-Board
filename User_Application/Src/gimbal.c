@@ -305,19 +305,25 @@ static void Gimbal_Update(void* arg) {
     /* deg/s -> RPM */
     const float rate_rpm = gimbal->target_rate * (1.0f / 6.0f);
 
-    float target_speed = GIMBAL_YAW_DIR *
-                         (gimbal->world_kp * error
-                          - gimbal->world_kd * gimbal->yaw_rate_lpf
-                          - user_chassis.omega * RAD_S_TO_RPM * gimbal->ff_gain)
-                         + rate_rpm;
+    /* 位置修正 = 位置环 + 陀螺阻尼 + 底盘前馈（这三项都是"修正量"）*/
+    float correction = GIMBAL_YAW_DIR *
+                       (gimbal->world_kp * error
+                        - gimbal->world_kd * gimbal->yaw_rate_lpf
+                        - user_chassis.omega * RAD_S_TO_RPM * gimbal->ff_gain);
 
-    /* 外环限幅：跨 ±180° 或 IMU 异常时不让外环一脚踹满速度环 */
-    if (target_speed > GIMBAL_WORLD_MAX_RPM) {
-        target_speed = GIMBAL_WORLD_MAX_RPM;
-    } else if (target_speed < -GIMBAL_WORLD_MAX_RPM) {
-        target_speed = -GIMBAL_WORLD_MAX_RPM;
+    /* ★ 只对【修正量】限幅，摇杆前馈不参与 —— 这是"冲一下再回来、不跟手"的结构性原因：
+       原来把两者一起限幅（目标 = 限幅(修正 + 前馈)），而满杆前馈就有
+       6 rad/s = 57 RPM，限幅却只有 60 RPM，等于把阻尼和修正的余量全挤没了，
+       松杆瞬间前馈掉到 0、阻尼却被限幅卡住 -> 冲过头再被拉回来。
+       限幅的真正目的只是拦住跨 ±180° 的一脚踹和 IMU 异常，不是限制正常控制。 */
+    if (correction > GIMBAL_WORLD_MAX_RPM) {
+        correction = GIMBAL_WORLD_MAX_RPM;
+    } else if (correction < -GIMBAL_WORLD_MAX_RPM) {
+        correction = -GIMBAL_WORLD_MAX_RPM;
     }
-    gimbal->target_speed = target_speed;
+
+    /* 摇杆前馈单独相加：它是"该以多快转"的命令，不该被修正限幅吃掉 */
+    gimbal->target_speed = correction + rate_rpm;
 
     gimbal->yaw_motor->Set_Motor_State(gimbal->yaw_motor, gimbal->target_speed);
 #else

@@ -468,6 +468,14 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"feed_ang_kd",  &user_shooter.feeder_pid_angle.kd,  0.0f,  10.0f, NULL},
     {"feed_spd_kp",  &user_shooter.feeder_pid_speed.kp,  0.0f, 100.0f, NULL},
     {"feed_spd_ki",  &user_shooter.feeder_pid_speed.ki,  0.0f,  20.0f, NULL},
+    /* ★★★ 拨盘转速的两个真正瓶颈（不是 KP/KI）：
+       feed_ang_mo = 外环(角度)的输出限幅，也就是【拨盘最高转速 RPM】。
+         一步 = 45°×36 = 1620° 转子角，一步最快耗时 = 1620/(feed_ang_mo×6) 秒。
+         原来 300 -> 一步 0.9s；现在 2500 -> 一步约 0.11s。想更快直接在线加这个。 */
+    {"feed_ang_mo",  &user_shooter.feeder_pid_angle.max_out, 0.0f, 10000.0f, NULL},
+    {"feed_spd_mo",  &user_shooter.feeder_pid_speed.max_out, 0.0f, 16384.0f, NULL},
+    /* 拨盘功率上限 W（45W ≈ 1.9A）。加速不够、拨盘发软就加它；发热不对就减 */
+    {"feed_pwr",     &user_feeder.power_limit,               0.0f,   120.0f, NULL},
 
     /* ---- 弹道解算（牛顿迭代）：dist/height 现在手动给，以后可接视觉/裁判系统；
        v0_k/v0_b 是摩擦轮转速->初速的线性模型，必须按实测标定 */
