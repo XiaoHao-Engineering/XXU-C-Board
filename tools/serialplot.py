@@ -66,7 +66,11 @@ MODE_NAMES = {
     #       顶重力的是【内环积分 psd_i】—— 稳态时它应稳定在某个非零值上，
     #       pid_i 接近 0。松手后 pitch 慢慢下沉且 psd_i 顶不上去，
     #       就加大 pitch_spd_ki 或 pitch_spd_mi。
-    3: ["pitch", "ptgt", "pspd", "pid_i", "psd_i", "pcur"],
+    3: ["pitch", "ptgt", "pspd", "pid_i", "psd_i", "pcur", "pacc", "pgyro"],
+    #   ★★ pacc / pgyro 是【互补滤波的两个输入】，专门用来看滤波效果：
+    #       pacc  加速度计解算角：抖动大（吃振动）但不漂
+    #       pgyro 陀螺积分角：    很平滑但会缓慢漂走
+    #       pitch（第 1 通道）应该【既平滑又不漂】= 互补滤波在工作
     # 4 = 射击机构 + CAN 总线排错
     #     frpm 原始转速 / frpm_f 滤波后 / frpm_t 目标 / ferr 拨弹轮位置误差
     #     fcur 拨弹轮滤波后电流 / bpitch 弹道解算角 / bv0 解算用初速

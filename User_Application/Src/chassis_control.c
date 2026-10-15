@@ -165,15 +165,21 @@ static void Chassis_Apply_Plot_Mode(void) {
 
     switch (mode) {
         case 3:
-            /* pitch 轴调试（6 通道）：俯仰角 | ptgt 目标角 | pspd 转速 | 外环积分 pid_i |
-               内环积分 psd_i | pcur 电流 mA。★ 顶重力的是内环积分 psd_i（稳态非零，
-               pid_i 接近 0）；松手下沉且 psd_i 顶不上去 -> 加大 pitch_spd_ki/mi */
-            Serialplot_Set_Data(&user_serialplot, 6,
+            /* pitch 轴调试（8 通道）：俯仰角 | ptgt 目标角 | pspd 转速 | 外环积分 pid_i |
+               内环积分 psd_i | pcur 电流 mA | pacc 加速度计解算角 | pgyro 陀螺积分角
+               ★ 顶重力的是内环积分 psd_i（稳态非零，pid_i 接近 0）；
+                 松手下沉且 psd_i 顶不上去 -> 加大 pitch_spd_ki/mi
+               ★★ 后两通道是【互补滤波的两个输入】，用来直接观察滤波效果：
+                 pacc  抖动大（吃振动）但不漂
+                 pgyro 很平滑但会缓慢漂走
+                 pitch（第 1 通道）应该【既平滑又不漂】= 互补滤波在起作用 */
+            Serialplot_Set_Data(&user_serialplot, 8,
                                 &user_gimbal.pitch, &user_gimbal.target_pitch,
                                 &user_gimbal.pitch_speed,
                                 &user_gimbal.pitch_pid_angle.iout,
                                 &user_gimbal.pitch_pid_speed.iout,
-                                &user_gimbal.pitch_current);
+                                &user_gimbal.pitch_current,
+                                &user_attitude.pitch_acc, &user_attitude.pitch_gyro);
             break;
 
         case 4:
