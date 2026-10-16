@@ -252,6 +252,23 @@ static void Chassis_Apply_Plot_Mode(void) {
                                 &user_vision.tx_packet.bullet_speed, &user_vision.tx_count_f);
             break;
 
+        case 8:
+            /* ★★ 自瞄接管 / 数据闸门调试（8 通道）：
+               ptgt_e 视觉给的 pitch 目标角（已过闸门的绝对角）| pitch 实际俯仰角 |
+               ptgt   最终目标角（含延迟外推）| perr pitch 视觉误差 |
+               pff    pitch 视觉角速度前馈 deg/s | take 本拍是否由视觉接管(1/0) |
+               ok     视觉数据是否有效(1/0) | auto 使能开关 yaw_auto
+               ★ 判据：
+                 auto=1 且 take=1 且 ok=1 -> 视觉正在控制（ptgt_e 应贴着 pitch 走）
+                 ok 一直闪 0 或 auto 自己掉成 0 -> 视觉数据被判无效（看 yaw 侧
+                 plot_mode=5 的 vfps/vok；连续 5 帧无效会退出接管，需要重新 yaw_auto=1）*/
+            Serialplot_Set_Data(&user_serialplot, 8,
+                                &user_gimbal.pitch_target_ext, &user_gimbal.pitch,
+                                &user_gimbal.target_pitch, &user_gimbal.pitch_aim_err,
+                                &user_gimbal.pitch_aim_rate, &user_gimbal.aim_takeover,
+                                &user_gimbal.aim_ok_f, &user_gimbal.yaw_auto);
+            break;
+
         case 2:
             /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
                gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */
@@ -444,7 +461,7 @@ void ChassisControl_JScopeCallback(void* arg) {
 static const SERIALPLOT_VAR chassis_tunable[] = {
     /* 串口绘图通道在线切换（发 plot_mode=N#）：0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch)
        3=云台pitch(6ch) 4=射击机构(8ch)。⚠️ 上位机通道数也要跟着改（serialplot.py COM4 N）*/
-    {"plot_mode",  &s_plot_mode,   0.0f,   4.0f,  Chassis_Apply_Plot_Mode},
+    {"plot_mode",  &s_plot_mode,   0.0f,   8.0f,  Chassis_Apply_Plot_Mode},
     {"test_wheel", &s_test_wheel, -4.0f, 4.0f,   NULL},
     {"test_rpm",   &s_test_rpm,    0.0f, 3000.0f, NULL},
     /* ⚠️ 上限必须是 CHASSIS_MAX_W：Chassis_Set_Velocity 里有幅值钳位，
@@ -492,6 +509,23 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     /* ★★★ 电流权限（满量程 16384）：yaw"一直不硬"的第一嫌疑就在这里。
        原来是 3000（只有 18%，0.55A）；V2.2 默认 12000（2.2A）。可以在线试到 16384 看手感/发热。 */
     {"gimbal_max_out", &user_gimbal_yaw_pid.max_out, 0.0f, 16384.0f, NULL},
+
+    /* ---- ★★ 自瞄（视觉接管）----
+       顺序建议：先 plot_mode=5# 看 vtgt/vyaw/verr/vok/vfps 确认视觉链路通了，
+       再 yaw_auto=1# 让视觉接管；pitch 与 yaw 共用同一份"有效/无效"判定。
+       ⚠️ aim_ff_gain / aim_ff_pitch 就是参考工程的 0.5 / 0.6（yaw / pitch 的角速度前馈系数）。
+          允许填负值：万一实测前馈方向相反（表现为"抢跑/越追越远"），直接把符号翻过来。
+       ⚠️ yaw_auto 会被数据闸门自动清零（连续 5 帧视觉数据无效 -> 退出接管回摇杆），
+          看到它自己掉成 0 就说明视觉那一侧在给野值/丢目标，先查视觉，不要硬开。
+       ⚠️ 开火链路【没有接】：接法见参考 ita_robot.cpp:424-434，本工程还没确认扳机通道。 */
+    {"yaw_auto",      &user_gimbal.yaw_auto,          0.0f,    1.0f, NULL},
+    {"aim_ff_gain",   &user_gimbal.aim_ff_gain,      -1.0f,    1.0f, NULL},
+    {"aim_ff_pitch",  &user_gimbal.aim_ff_gain_pitch,-1.0f,    1.0f, NULL},
+    {"cam_yaw_off",   &user_gimbal.cam_yaw_off,     -10.0f,   10.0f, NULL},
+    {"cam_pitch_off", &user_gimbal.cam_pitch_off,   -10.0f,   10.0f, NULL},
+    /* 延迟补偿 ms：视觉"看到"的是过去的画面，用云台角速度外推到"现在"。需按实测改 */
+    {"aim_delay_ms",  &user_gimbal.aim_delay_ms,      0.0f,  200.0f, NULL},
+    {"aim_timeout_ms",&user_gimbal.aim_timeout_ms,    0.0f, 1000.0f, NULL},
 
     /* ---- 云台 pitch（GM6020 ID4，挂 CAN2，串级 + 增强 PID）----
        外环=角度环(deg->RPM)，内环=速度环(RPM->电流)；⚠️ pitch_spd_ki 不要为 0，顶重力

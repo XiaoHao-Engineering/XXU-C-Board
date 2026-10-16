@@ -1,5 +1,6 @@
 #include "../../Core/Inc/bsp.h"
 #include "../gimbal.h"
+#include <math.h>       /* isnan / isinf：视觉数据有效性闸门要用（工程可用标准 math.h）*/
 
 #define YAW_STICK_MAX   (660.0f)
 #define RAD_S_TO_RPM    (9.54929659f)   /* 60 / 2pi */
@@ -10,6 +11,10 @@ static GIMBAL_DRIVES* s_gimbal = NULL;
 
 static void  Gimbal_Update(void* arg);
 static void  Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal);
+static void  Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal);
+static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal);
+static void  Gimbal_Aim_Release(GIMBAL_DRIVES* gimbal);
+static void  Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal);
 static float Gimbal_Wrap180(float deg);
 static float Gimbal_Stick(int16_t value, float dead);
 static int16_t Gimbal_RC_Channel(uint8_t ch);
@@ -42,7 +47,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->yaw_auto_pre = 0.0f;
     gimbal->yaw_target_ext = 0.0f;
     gimbal->cam_yaw_off = GIMBAL_CAM_YAW_OFF;
-    gimbal->aim_ff_gain = GIMBAL_AIM_FF_GAIN;
+    gimbal->aim_ff_gain = GIMBAL_AIM_FF_GAIN_YAW;
     gimbal->aim_delay_ms = GIMBAL_AIM_DELAY_MS;
     gimbal->aim_timeout_ms = GIMBAL_AIM_TIMEOUT_MS;
     gimbal->aim_err = 0.0f;
@@ -50,6 +55,19 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->aim_valid = 0;
     gimbal->aim_ms = 0;
     gimbal->target_rate = 0.0f;
+
+    /* 自瞄 pitch 侧（与 yaw 对称）+ 数据闸门的计数器 */
+    gimbal->pitch_target_ext = 0.0f;
+    gimbal->cam_pitch_off = GIMBAL_CAM_PITCH_OFF;
+    gimbal->aim_ff_gain_pitch = GIMBAL_AIM_FF_GAIN_PITCH;
+    gimbal->pitch_aim_err = 0.0f;
+    gimbal->pitch_aim_valid = 0;
+    gimbal->aim_rate = 0.0f;
+    gimbal->pitch_aim_rate = 0.0f;
+    gimbal->aim_takeover = 0.0f;
+    gimbal->aim_bad_frames = 0;
+    gimbal->aim_reject_cnt = 0;
+    gimbal->last_vision_frame = 0;
     gimbal->last_dbus_count = 0;
     gimbal->dbus_offline_ms = 0;
 
@@ -230,13 +248,20 @@ static void Gimbal_Update(void* arg) {
     gimbal->angle_raw = DJI_Motor_Get_Angle(gimbal->yaw_motor);
     gimbal->speed = DJI_Motor_Get_Speed(gimbal->yaw_motor);
 
-    /* ★ pitch 轴在这里更新：必须放在 yaw 的"未对齐就 return"之前，否则 yaw 掉线会把 pitch 一起跳过 */
-    Gimbal_Pitch_Update(gimbal);
-
 #if GIMBAL_LOCK_WORLD
-    /* A 板在云台 yaw 上，所以 IMU 的 yaw 就是【云台的世界朝向】 */
+    /* A 板在云台 yaw 上，所以 IMU 的 yaw 就是【云台的世界朝向】。
+       ★ 提到 pitch / 自瞄之前：视觉数据闸门要用它做 yaw 量程判定（见 Gimbal_Aim_Update）*/
     gimbal->imu_yaw = Gimbal_Wrap180(Attitude_Get_Yaw(&user_attitude));
 #endif
+
+    /* ★★ 视觉自瞄：数据有效性闸门 + 目标解算。
+       必须放在两个轴的控制之前：视觉一包里 yaw/pitch 是同一帧，两个轴要用
+       同一份"有效/无效"结论（要么都信，要么都不信）。它只写结构体里的
+       目标角/前馈/标志，不下发任何电机指令。 */
+    Gimbal_Aim_Update(gimbal);
+
+    /* ★ pitch 轴在这里更新：必须放在 yaw 的"未对齐就 return"之前，否则 yaw 掉线会把 pitch 一起跳过 */
+    Gimbal_Pitch_Update(gimbal);
 
 #if GIMBAL_RC_ENABLE
     /* 遥控在线检测用 rx_count 而不是 is_update：① is_update 会被底盘任务清零，两个模块抢同一个
@@ -259,36 +284,25 @@ static void Gimbal_Update(void* arg) {
        位置环只能事后去追 -> "冲出去再回来"。限斜率让前馈慢慢减下来，云台跟着平滑减速。
        积分用的也是限斜率之后的 target_rate，所以目标角不会跳。 */
     const float rate_cmd = stick * gimbal->max_w * RAD_TO_DEG * GIMBAL_YAW_DIR;
-    if (gimbal->yaw_auto > 0.5f) {
-        /* ★★★ 自瞄接管：目标角来自视觉，摇杆不参与。
-           四条缺一不可：无扰动接管 / 丢帧冻结 / 延迟补偿 / 角速度前馈。 */
-        /* ① 接管瞬间：目标角从【当前角度】起，否则云台猛甩一下（撞软限位、丢目标）*/
-        if (gimbal->yaw_auto_pre < 0.5f) {
-            gimbal->yaw_target_ext = gimbal->imu_yaw;
-            gimbal->aim_ms = HAL_GetTick();
-            gimbal->aim_valid = 0;
-        }
-        /* ② 在线判定 + 丢帧冻结：超时就【冻结】目标角，
-              既不继续外推（会越推越偏），也不回中（会让操作手措手不及）*/
-        if (Vision_Is_Online(&user_vision) != 0) {
-            gimbal->aim_ms = HAL_GetTick();
-            gimbal->aim_valid = 1;
-        } else if ((HAL_GetTick() - gimbal->aim_ms) > (uint32_t)gimbal->aim_timeout_ms) {
-            gimbal->aim_valid = 0;
-        }
+    if (gimbal->aim_takeover > 0.5f) {
+        /* ★★★ 自瞄接管：目标角来自视觉，摇杆完全不参与。
+           参考 ita_robot.cpp:639-650 —— "视觉下，覆盖设置云台的目标角度"（世界绝对角）。 */
         if (gimbal->aim_valid != 0) {
-            gimbal->yaw_target_ext =
-                Gimbal_Wrap180(user_vision.target_yaw * VISION_PKG2DEG + gimbal->cam_yaw_off);
-            /* ③ 前馈：视觉给的【目标角速度】直接当目标速率（复用已有的前馈通路）*/
-            gimbal->target_rate = user_vision.target_yaw_vel * VISION_PKG2DEG * gimbal->aim_ff_gain;
+            /* ① 接管瞬间的目标初始化在 Gimbal_Aim_Update 里做（目标角从当前角度起），
+                  否则云台会朝一个陈旧目标猛甩一下（撞软限位、丢目标）*/
+            gimbal->target_rate = 0.0f;      /* 摇杆积分停用，避免和视觉目标打架 */
+            /* ② 延迟补偿：视觉看到的是【过去】，用云台自身角速度外推到"现在"。
+                  age 用 aim_delay_ms 估计（需实测）；姿态漂移在几十毫秒内可忽略 */
+            gimbal->target_yaw = Gimbal_Wrap180(gimbal->yaw_target_ext
+                                 + gimbal->yaw_rate_lpf * 6.0f
+                                   * (gimbal->aim_delay_ms * 0.001f));
         } else {
+            /* ③ 丢帧冻结：视觉数据暂时不可用时【冻结】目标角 ——
+                  既不继续外推（会越推越偏），也不回中（会让操作手措手不及）；
+                  角速度前馈同时清零，不许带着上一帧的速度继续冲 */
             gimbal->target_rate = 0.0f;
+            gimbal->aim_rate = 0.0f;
         }
-        /* ④ 延迟补偿：视觉看到的是【过去】，用云台角速度外推到"现在"。
-              age 用 aim_delay_ms 估计（需实测）；姿态漂移在几十毫秒内可忽略 */
-        gimbal->target_yaw = Gimbal_Wrap180(gimbal->yaw_target_ext
-                             + gimbal->yaw_rate_lpf * 6.0f
-                               * (gimbal->aim_delay_ms * 0.001f));
         gimbal->aim_err = Gimbal_Wrap180(gimbal->yaw_target_ext - gimbal->imu_yaw);
         gimbal->aim_ok_f = (float)gimbal->aim_valid;
     } else {
@@ -303,6 +317,7 @@ static void Gimbal_Update(void* arg) {
 
     gimbal->target_yaw += gimbal->target_rate * GIMBAL_DT_S;
     gimbal->target_yaw = Gimbal_Wrap180(gimbal->target_yaw);
+    gimbal->aim_rate = 0.0f;     /* 摇杆模式：视觉前馈必须清零，避免残留 */
     }
     gimbal->yaw_auto_pre = gimbal->yaw_auto;
 #else
@@ -340,6 +355,9 @@ static void Gimbal_Update(void* arg) {
     const float tx_pitch = user_attitude.qe_pitch + gimbal->pitch;
 #endif
 
+    /* ★ 回传的工作模式用【使能开关 yaw_auto】而不是 aim_takeover：
+       这是和视觉的握手 —— 只有先告诉视觉"AUTOAIM"，它才会开始发 mode=1/2 的控制包；
+       若这里改成看 aim_takeover（依赖 mode!=0），就会形成"等对方先动"的死锁。 */
     Vision_Set_Tx_Mode(&user_vision,
                        (gimbal->yaw_auto > 0.5f) ? VISION_TX_MODE_AUTOAIM : VISION_TX_MODE_IDLE);
     Vision_Set_Tx_Attitude(&user_vision,
@@ -414,8 +432,12 @@ static void Gimbal_Update(void* arg) {
     const float gyro_rate_rpm = user_attitude.yaw_rate * (1.0f / 6.0f);
     gimbal->yaw_rate_lpf += GIMBAL_WORLD_D_ALPHA * (gyro_rate_rpm - gimbal->yaw_rate_lpf);
 
-    /* deg/s -> RPM，乘摇杆前馈增益 KF（>1 = 略微超喂，起步更利落；前馈不在反馈回路里，不影响稳定性）*/
-    const float rate_rpm = gimbal->target_rate * gimbal->stick_kf * (1.0f / 6.0f);
+    /* deg/s -> RPM（1 RPM = 6 deg/s）= 摇杆速率前馈 + 视觉自瞄角速度前馈。
+       ★ 摇杆前馈乘"超喂"增益 stick_kf（>1 起步更利落，前馈不在反馈回路里，不影响稳定性）；
+       ★ 自瞄前馈【不】乘 stick_kf —— 参考工程给的 0.5/0.6 就是最终系数，
+         再乘 1.3 的摇杆超喂就不是 0.5 了（在线调 aim_ff_gain/aim_ff_pitch 才是正确旋钮）。*/
+    const float rate_rpm = (gimbal->target_rate * gimbal->stick_kf + gimbal->aim_rate)
+                         * (1.0f / 6.0f);
 
     /* 位置修正 = 位置环 + 陀螺阻尼 + 底盘前馈（这三项都是"修正量"）*/
     float correction = GIMBAL_YAW_DIR *
@@ -509,17 +531,47 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
 
     gimbal->pitch_stick = stick;
 
-    /* pitch_auto != 0 时目标角由上层（弹道解算）给，摇杆不参与，避免互相打架 */
-    if (gimbal->pitch_auto < 0.5f) {
+    /* ★★★ 视觉自瞄接管 pitch（覆盖式，与 yaw 完全对称）----------------------------
+       参考工程 ita_robot.cpp:721-733：使能 && 在线 && mode!=0 时
+         "视觉下，覆盖设置云台的目标角度"：目标角 = 视觉给的世界绝对角（不是叠加到摇杆积分上），
+         速度前馈   = 系数(0.6) × 视觉目标角速度 -> 叠加到【速度环】的目标上。
+       ★ 与 yaw 的差别：pitch 这里【没有】"摇杆积分被覆盖"的问题，因为目标本身就是给角度，
+         所以直接覆盖 target_pitch 即可；数据有效性/野值拦截已经在 Gimbal_Aim_Update 里做完。
+       ★ 优先级：自瞄接管 > 弹道解算(pitch_auto) > 摇杆。参考工程也是视觉覆盖在最后。
+       ★ 开火链路先不做：接法见参考 ita_robot.cpp:424-434（在线 && mode==CONTROL_AND_FIRE
+         且左键按下 -> 请求开火），本工程还没有确认扳机/使能通道，不要自己发明通道号。 */
+    if (gimbal->aim_takeover > 0.5f) {
+        /* 世界绝对角 + 延迟外推：视觉看到的是【过去】，用云台自身角速度外推到"现在"
+           （pitch_speed 是电机转速 RPM，×6 = deg/s；1 RPM = 6 deg/s）*/
+        gimbal->target_pitch = gimbal->pitch_target_ext
+                             + gimbal->pitch_speed * 6.0f
+                               * (gimbal->aim_delay_ms * 0.001f);
+        gimbal->pitch_aim_err = gimbal->pitch_target_ext - gimbal->pitch;
+    } else if (gimbal->pitch_auto < 0.5f) {
+        /* pitch_auto != 0 时目标角由上层（弹道解算）给，摇杆不参与，避免互相打架 */
         gimbal->target_pitch += stick * gimbal->pitch_max_w * GIMBAL_PITCH_RC_DIR * GIMBAL_DT_S;
     }
 
-    /* 软限位：夹住目标角；目标固定后误差不再增大、积分也不再涨，等于顺带做了抗积分饱和 */
+    /* 软限位：夹住目标角；目标固定后误差不再增大、积分也不再涨，等于顺带做了抗积分饱和。
+       ★ 自瞄目标在闸门里已经用同一对 MIN/MAX（留 1° 余量）判过有效性，这里是最终夹紧 */
     if (gimbal->target_pitch > GIMBAL_PITCH_MAX_DEG) {
         gimbal->target_pitch = GIMBAL_PITCH_MAX_DEG;
     } else if (gimbal->target_pitch < GIMBAL_PITCH_MIN_DEG) {
         gimbal->target_pitch = GIMBAL_PITCH_MIN_DEG;
     }
+
+    /* ★★ 视觉角速度前馈 -> 【速度环目标】--------------------------------------------
+       参考工程走的是 Motor_Pitch.Set_Feedforward_Omega(0.6 × 视觉角速度)
+       （ita_robot.cpp:727/731）。本工程 pitch 是【外环角度(deg->RPM) + 内环速度(RPM->电流)】
+       的串级，外环的输出就是内环（速度环）的目标 —— 因此把前馈(deg/s -> RPM)
+       加到外环输出上（PID_Adv 的 ff_ext）就等价于"叠加到速度环的目标上"。
+       ⚠️ 摇杆模式必须写回 0，否则会一直带着上一次自瞄的残留前馈。
+       ⚠️ 外环自带的 pitch_ang_kf 是把【目标角差分】当目标速度用的；视觉每帧是阶跃更新，
+          会因此产生一个每帧一次的脉冲。若实测"每帧顶一下"，把 pitch_ang_kf 在线调到 0
+          （真正的目标角速度已经由视觉通过 ff_ext 提供了）。 */
+    PID_Adv_Set_Feedforward(&gimbal->pitch_pid_angle,
+                            (gimbal->aim_takeover > 0.5f)
+                            ? (gimbal->pitch_aim_rate * (1.0f / 6.0f)) : 0.0f);
 
 #if GIMBAL_PITCH_CASCADE
     /* ★ 串级在电机内部跑（Rotor_angle 模式）：只把目标【角度】交给电机，它自己走角度环→速度环→电流 */
@@ -532,6 +584,183 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
     motor->Set_Motor_State(motor, gimbal->pitch_speed_target);
 #endif
 #endif /* GIMBAL_PITCH_ENABLE */
+}
+
+/* ================= 视觉自瞄：数据闸门 + 目标解算（安全关键） =================
+   为什么集中放一个函数：视觉一包同时带 yaw 和 pitch，两轴必须共用同一帧的
+   "有效/无效"结论；而且放行只能有【一处】，才能保证"拒绝时绝不把野值写进目标变量"。
+
+   六道闸（阈值都是 gimbal.h 里的 GIMBAL_AIM_* 宏，单位度，方便现场调参）：
+     ① NaN/Inf      —— 先于一切算术；否则后面比较全部失效、Wrap180 的 float->int 是 UB
+     ② 不接管       —— 未使能 / 离线 / mode==NO_CONTROL：回摇杆，一个目标变量都不写
+     ③ yaw 量程     —— 归一化后与当前世界角偏差 > GIMBAL_AIM_MAX_ERR_DEG -> 无效
+     ④ pitch 量程   —— 超出现有机械软限位（留 GIMBAL_AIM_PITCH_MARGIN_DEG）-> 无效
+     ⑤ 跳变门限     —— 与上一帧有效目标角差 > GIMBAL_AIM_JUMP_DEG -> 本帧无效
+     ⑥ 连续无效计数 —— 连续 GIMBAL_AIM_INVALID_LIMIT 帧无效 -> 退出接管、回摇杆
+   前因后果与实测野值例子见 gimbal.h 里 GIMBAL_AIM_MAX_ERR_DEG 那一段注释。 */
+
+/* 放行一帧视觉数据：返回 1 = 六道闸全过，并且已经把目标角/前馈写进结构体；
+   返回 0 = 本帧无效（调用者负责计数、保持上一帧目标、必要时退出接管）。*/
+static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
+    /* 闸① NaN / Inf —— 必须放在换算与 Gimbal_Wrap180 之前 */
+    const float raw_yaw     = user_vision.target_yaw;
+    const float raw_yaw_vel = user_vision.target_yaw_vel;
+    const float raw_pitch   = user_vision.target_pitch;
+    const float raw_pitch_vel = user_vision.target_pitch_vel;
+
+    if (isnan(raw_yaw) || isinf(raw_yaw)
+        || isnan(raw_yaw_vel) || isinf(raw_yaw_vel)
+        || isnan(raw_pitch) || isinf(raw_pitch)
+        || isnan(raw_pitch_vel) || isinf(raw_pitch_vel)) {
+        return 0;
+    }
+
+    /* 单位换算：包内是【弧度】（与参考工程一致，见 user_vision.h），工程内部是【度】 */
+    const float yaw_ext = Gimbal_Wrap180(raw_yaw * VISION_PKG2DEG + gimbal->cam_yaw_off);
+    const float pitch_ext = raw_pitch * VISION_PKG2DEG + gimbal->cam_pitch_off;
+    /* TODO(需实测标定): 视觉给的 pitch 与工程内部的 pitch（上电标定后的【关节角】）之间
+       是否存在随姿态变化的差？参考工程是直接把 Get_Target_Pitch() 当关节角目标用
+       （ita_robot.cpp:725），本工程照做；若实测发现"底盘俯仰变化后 pitch 目标整体偏了"，
+       就在这里加/减 user_attitude.pitch（或用 cam_pitch_off 补掉那个常量差）。
+       注意本工程发给视觉的 pitch 只含 IMU 俯仰（VISION_PITCH_USE_IMU_ONLY=1），
+       这个约定要和视觉侧对齐。 */
+
+    /* 闸③ yaw 量程：视觉给的是世界绝对角，正常跟踪时与云台当前世界角很接近；
+       差得离谱说明这一帧不是可信目标（例如 197.7° 这种 tracker 丢失时的输出）。
+       ⚠️ 单靠这道闸拦不住 -9518.6°（归一化后是 -158.6°，可能刚好落在范围内），
+          所以必须配合闸⑤的跳变门限一起用。 */
+    if (fabsf(Gimbal_Wrap180(yaw_ext - gimbal->imu_yaw)) > GIMBAL_AIM_MAX_ERR_DEG) {
+        return 0;
+    }
+
+    /* 闸④ pitch 量程：必须落在【工程已有】的机械软限位内（留一点余量兼容标定误差）*/
+    if (pitch_ext > (GIMBAL_PITCH_MAX_DEG + GIMBAL_AIM_PITCH_MARGIN_DEG)
+        || pitch_ext < (GIMBAL_PITCH_MIN_DEG - GIMBAL_AIM_PITCH_MARGIN_DEG)) {
+        return 0;
+    }
+
+    /* 闸⑤ 跳变门限：和上一帧【有效】目标角比。跨 ±180° 求差要先用 Wrap180，
+       否则目标从 +179 走到 -179（实际只动 2°）会被误判成 358° 的大跳变。 */
+    if (fabsf(Gimbal_Wrap180(yaw_ext - gimbal->yaw_target_ext)) > GIMBAL_AIM_JUMP_DEG
+        || fabsf(pitch_ext - gimbal->pitch_target_ext) > GIMBAL_AIM_JUMP_DEG) {
+        return 0;
+    }
+
+    /* 全部通过：这是【唯一】写视觉目标的地方（拒绝路径绝不写，见函数头说明）*/
+    gimbal->yaw_target_ext   = yaw_ext;
+    gimbal->pitch_target_ext = pitch_ext;
+    /* 角速度前馈：系数 × 视觉目标角速度（参考 0.5 / 0.6），到速度环前再 /6 换算成 RPM */
+    gimbal->aim_rate       = raw_yaw_vel * VISION_PKG2DEG * gimbal->aim_ff_gain;
+    gimbal->pitch_aim_rate = raw_pitch_vel * VISION_PKG2DEG * gimbal->aim_ff_gain_pitch;
+    return 1;
+}
+
+/* 本拍不接管，但保留操作手的使能开关：离线 / mode==NO_CONTROL 时用（回摇杆控制）。
+   ★ 不清 aim_ms：离线超时（aim_timeout_ms）正是靠它判"视觉是真的没了"。 */
+static void Gimbal_Aim_Release(GIMBAL_DRIVES* gimbal) {
+    gimbal->aim_takeover = 0.0f;
+    gimbal->aim_valid = 0;
+    gimbal->pitch_aim_valid = 0;
+    gimbal->aim_rate = 0.0f;
+    gimbal->pitch_aim_rate = 0.0f;
+    gimbal->aim_ok_f = 0.0f;
+}
+
+/* 退出接管：放掉使能开关、回摇杆控制，要求操作手重新打开。
+   ★ 不自动恢复是故意的：野值/丢失通常是持续性的（目标真的没了、或跟踪错了），
+     自动恢复会形成"接管→甩一下→退出→再接管"的抖动，比干脆交还给操作手更危险。
+     排错看 aim_reject_cnt（累计拒绝帧数）与 aim_bad_frames（连续无效帧数）。*/
+static void Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal) {
+    Gimbal_Aim_Release(gimbal);
+    gimbal->yaw_auto = 0.0f;
+    gimbal->aim_bad_frames = 0;
+}
+
+static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
+    const uint32_t now = HAL_GetTick();
+
+    /* 闸②-a 未使能：视觉一概不参与，摇杆/编码器控制保持原样 */
+    if (gimbal->yaw_auto < 0.5f) {
+        Gimbal_Aim_Release(gimbal);
+        gimbal->aim_bad_frames = 0;
+        gimbal->last_vision_frame = user_vision.frame_count;  /* 关着的时候不累计"无效帧" */
+        gimbal->yaw_auto_pre = gimbal->yaw_auto;
+        return;
+    }
+
+    /* 使能【刚打开】这一拍：给"最近一次有效帧时刻"打起点。
+       ★ 必须放在这里、而不是下面那个"接管瞬间"里：离线时每拍都会走"接管瞬间"
+         （因为上一拍被 Release 掉了），时间戳就会被一直刷新 ->
+         "离线超过 aim_timeout_ms 就退出接管"这条永远触发不了。 */
+    if (gimbal->yaw_auto_pre < 0.5f) {
+        gimbal->aim_ms = now;
+    }
+    gimbal->yaw_auto_pre = gimbal->yaw_auto;
+
+    /* 接管瞬间（从摇杆/离线/mode==0 切回视觉控制）：目标角从【当前角度】起。
+       不这么做，第一次接管会朝一个陈旧目标猛甩（撞软限位、丢目标）。 */
+    if (gimbal->aim_takeover < 0.5f) {
+        gimbal->yaw_target_ext = gimbal->imu_yaw;
+        gimbal->pitch_target_ext = gimbal->pitch;
+        gimbal->aim_bad_frames = 0;
+        gimbal->aim_rate = 0.0f;
+        gimbal->pitch_aim_rate = 0.0f;
+    }
+
+    /* 闸②-b 视觉离线：不接管，回摇杆（保持原来的摇杆/编码器控制）。
+       短丢帧（< aim_timeout_ms）只是这一拍交还摇杆，云台目标不会跳（接管时重新以
+       当前角度为起点）；连续超过 aim_timeout_ms 仍无有效帧 -> 判"视觉真的没了"，退出接管。*/
+    if (Vision_Is_Online(&user_vision) == 0) {
+        Gimbal_Aim_Release(gimbal);
+        if ((uint32_t)(now - gimbal->aim_ms) > (uint32_t)gimbal->aim_timeout_ms) {
+            Gimbal_Aim_Abort(gimbal);
+        }
+        return;
+    }
+
+    /* 闸②-c mode == NO_CONTROL：视觉主动要求"别控制"，同样交还摇杆。
+       ★ 这里【不】动 yaw_auto：操作手的使能开关不能被视觉的一帧悄悄改掉。 */
+    if (Vision_Get_Rx_Mode(&user_vision) == VISION_RX_MODE_NO_CONTROL) {
+        Gimbal_Aim_Release(gimbal);
+        gimbal->last_vision_frame = user_vision.frame_count;
+        return;
+    }
+
+    /* 接管条件齐了：使能 && 在线 && mode != NO_CONTROL（参考 ita_robot.cpp:639 同款）*/
+    gimbal->aim_takeover = 1.0f;
+
+    /* ★ 只有【新的一帧】才做校验与计数：控制任务是 1kHz，视觉约 100Hz，
+       否则一帧之间会被误判成"连续多帧无效"而误退出。没有新帧就沿用上一帧的结论
+       （目标角零阶保持，Gimbal_Pitch_Update / yaw 那两处都会用它）。 */
+    if (gimbal->last_vision_frame == user_vision.frame_count) {
+        return;
+    }
+    gimbal->last_vision_frame = user_vision.frame_count;
+
+    if (Gimbal_Aim_Accept_Frame(gimbal) != 0) {
+        gimbal->aim_valid = 1;
+        gimbal->pitch_aim_valid = 1;
+        gimbal->aim_bad_frames = 0;
+        gimbal->aim_ms = now;
+        gimbal->aim_ok_f = 1.0f;
+        return;
+    }
+
+    /* 本帧被闸门拒绝：保持上一帧的有效目标（绝不写野值），前馈立刻清零 */
+    gimbal->aim_reject_cnt++;
+    if (gimbal->aim_bad_frames < 0xFFFFU) {
+        gimbal->aim_bad_frames++;
+    }
+    gimbal->aim_valid = 0;
+    gimbal->pitch_aim_valid = 0;
+    gimbal->aim_rate = 0.0f;
+    gimbal->pitch_aim_rate = 0.0f;
+    gimbal->aim_ok_f = 0.0f;
+
+    /* 闸⑥ 连续若干帧都无效 -> 退出接管、回摇杆控制（要求操作手重新打开自瞄）*/
+    if (gimbal->aim_bad_frames >= GIMBAL_AIM_INVALID_LIMIT) {
+        Gimbal_Aim_Abort(gimbal);
+    }
 }
 
 void Gimbal_Wave_Apply(void) {

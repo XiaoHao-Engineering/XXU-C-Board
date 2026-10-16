@@ -51,12 +51,49 @@
    ★ 它是【前馈】、不在反馈回路里，所以改它【不影响稳定性】—— 这正是它比加 kp 安全的原因。
    在线调 gimbal_kf，建议范围 1.0 ~ 1.3。 */
 #define GIMBAL_YAW_KF           (1.30f)
-/* ---- 自瞄（视觉）接管配置 ---- */
+/* ---- 自瞄（视觉）接管配置 ----
+   语义按参考工程 crt_gimbal.cpp / ita_robot.cpp:_Gimbal_Control()：
+     ① 视觉给的目标角是【世界绝对角】，以【覆盖】的方式给云台（不是叠加到摇杆积分上）；
+     ② 视觉给的目标角速度当作【速度前馈】，乘一个系数后叠加到【速度环】的目标上；
+     ③ 接管条件 = 使能 && 视觉在线 && mode != NO_CONTROL。
+   与参考的差别（本工程比参考完整）：保留了下面的 aim_delay_ms 延迟外推，
+   并额外加了一道【数据有效性闸门】（参考工程几乎没有无效值保护，见 GIMBAL_AIM_* 一段）。 */
 #define GIMBAL_YAW_AUTO_DEF     (0.0f)     /* 0=摇杆 1=视觉接管（在线调 yaw_auto）*/
 #define GIMBAL_CAM_YAW_OFF      (0.0f)     /* 相机光轴与枪管的水平零位偏置 deg */
-#define GIMBAL_AIM_FF_GAIN      (1.0f)     /* 视觉角速度前馈增益：1.0=直接用视觉给的角速度 */
+#define GIMBAL_CAM_PITCH_OFF    (0.0f)     /* 相机光轴与枪管的俯仰零位偏置 deg（打靶标定）*/
+/* ★★ 前馈系数与参考工程逐项对齐：
+   crt_gimbal.cpp:40  Set_Yaw_Feedforward_Omega_Gain(0.5f)
+   crt_gimbal.cpp:47  Set_Pitch_Feedforward_Omega_Gain(0.6f)
+   ita_robot.cpp:644/727  feedforward = 系数 × 视觉目标角速度
+   ⚠️ 它们只是"用视觉角速度的百分之多少去喂速度环"的无量纲系数（前馈不在反馈回路里，
+      改它不影响稳定性，只影响跟踪移动目标时的滞后/超调）。在线可调：aim_ff_gain / aim_ff_pitch */
+#define GIMBAL_AIM_FF_GAIN_YAW   (0.5f)
+#define GIMBAL_AIM_FF_GAIN_PITCH (0.6f)
+/* 兼容旧名：原来只有一个 GIMBAL_AIM_FF_GAIN(1.0)，语义就是 yaw 的角速度前馈系数 */
+#define GIMBAL_AIM_FF_GAIN       (GIMBAL_AIM_FF_GAIN_YAW)
 #define GIMBAL_AIM_DELAY_MS     (20.0f)    /* 链路延迟估计 ms，需实测（先给 20）*/
-#define GIMBAL_AIM_TIMEOUT_MS   (120.0f)   /* 丢帧超时 ms */
+#define GIMBAL_AIM_TIMEOUT_MS   (120.0f)   /* 丢帧/离线超时 ms：超过就判"视觉真的没了" */
+
+/* ---- ★★★ 视觉数据有效性闸门（安全关键；参考工程没有，本工程必须有）--------------
+   实测：视觉在 tracker=lost 时会给出 raw_ctrl_yaw_deg = -9518.6、ctrl_pitch_deg = 197.7
+   这类【离谱值】。这些值直接拿去控制，云台会猛甩（撞软限位、丢目标、甚至打机构）。
+   所以视觉数据在写进 yaw_target_ext / pitch_target_ext 之前要过下面几道闸：
+
+     闸① NaN/Inf      —— 一旦混进来，后面所有比较都会失效（NaN 与任何数比较都是 false），
+                          Gimbal_Wrap180 里的 float->int 转换更是未定义行为，必须先拦。
+     闸② 未使能/离线/mode==0 —— 不接管，回摇杆，连算都不算。
+     闸③ yaw 量程     —— 归一化到 ±180 后，与【当前世界角】的偏差 > 本阈值 = 无效。
+                          注意：-9518.6° 归一化后是 -158.6°，只靠这一道闸不一定拦得住，
+                          必须和闸⑤（跳变）一起用。
+     闸④ pitch 量程   —— 必须落在【工程已有】的机械软限位（GIMBAL_PITCH_MIN/MAX_DEG）内，
+                          超一点（留 MARGIN）就拒绝。
+     闸⑤ 跳变门限     —— 与上一帧【有效】目标角的差 > 本阈值 = 单帧野值，本帧拒。
+     闸⑥ 连续无效计数 —— 连续 GIMBAL_AIM_INVALID_LIMIT 帧都被拒 -> 退出接管、回摇杆。
+   单位都是【度】（工程内部单位）。拒绝时【绝不写】目标角，继续用上一帧的有效值。 */
+#define GIMBAL_AIM_MAX_ERR_DEG       (120.0f)  /* 闸③：目标与当前世界角的偏差上限 */
+#define GIMBAL_AIM_JUMP_DEG          (60.0f)   /* 闸⑤：单帧目标角跳变门限 */
+#define GIMBAL_AIM_PITCH_MARGIN_DEG  (1.0f)    /* 闸④：pitch 有效性判据比软限位松 1° */
+#define GIMBAL_AIM_INVALID_LIMIT     (5U)      /* 闸⑥：连续多少帧被拒就退出接管 */
 
 /* ★★★ 陀螺零偏在线跟踪 —— 根治"摇杆不动时每 5~6 秒飘一次"-----------------
    机理：IMU 的 yaw 是【纯陀螺积分、没有绝对参考】，零偏（实测约 0.05deg/s）会让 imu_yaw
@@ -242,18 +279,31 @@ typedef struct {
     float bias_k;                  /* 零偏跟踪系数，可在线改（0=关闭）*/
     float enc_rate_lpf;            /* 编码器角速度低通状态 deg/s */
     float enc_last;                /* 上一拍编码器角度 deg */
-    /* ---- 自瞄（视觉）接管 ---- */
-    float    yaw_auto;        /* ≠0 = 目标角由视觉给，摇杆不参与。在线调 yaw_auto */
-    float    yaw_auto_pre;    /* 上一拍标志，用于检测"接管瞬间" */
-    float    yaw_target_ext;  /* 视觉给的目标角 deg */
+    /* ---- 自瞄（视觉）接管：yaw ---- */
+    float    yaw_auto;        /* ≠0 = 使能视觉接管（操作手开关）。在线调 yaw_auto */
+    float    yaw_auto_pre;    /* 上一拍使能标志（观察/兼容用）*/
+    float    yaw_target_ext;  /* 视觉给的 yaw 目标角 deg（世界绝对角，覆盖式）*/
     float    cam_yaw_off;     /* 相机光轴 <-> 枪管零位偏置 deg（打靶标定）*/
-    float    aim_ff_gain;     /* 视觉角速度前馈增益（前馈不在回路里，改它不影响稳定性）*/
+    float    aim_ff_gain;     /* yaw 视觉角速度前馈增益（参考 0.5；前馈不在回路里，不影响稳定性）*/
     float    aim_delay_ms;    /* 链路延迟补偿 ms */
-    float    aim_timeout_ms;  /* 丢帧超时 ms，超时就冻结目标角 */
+    float    aim_timeout_ms;  /* 丢帧/离线超时 ms，超时就判"视觉真的没了" */
     float    aim_err;         /* 观察用：视觉目标 - 实际 */
-    float    aim_ok_f;        /* 观察用镜像：1=数据有效 */
-    uint8_t  aim_valid;
-    uint32_t aim_ms;
+    float    aim_ok_f;        /* 观察用镜像：1=本帧视觉数据有效 */
+    uint8_t  aim_valid;       /* 1=视觉目标可用（含短丢帧的保持期）*/
+    uint32_t aim_ms;          /* 最近一次【有效帧】的时刻（离线超时判定用）*/
+
+    /* ---- 自瞄（视觉）接管：pitch（与 yaw 完全对称，见 gimbal.c 的 Gimbal_Aim_Update）---- */
+    float    pitch_target_ext;  /* 视觉给的 pitch 目标角 deg（绝对角，覆盖式）*/
+    float    cam_pitch_off;     /* 相机光轴 <-> 枪管俯仰零位偏置 deg */
+    float    aim_ff_gain_pitch; /* pitch 视觉角速度前馈增益（参考 0.6）*/
+    float    pitch_aim_err;     /* 观察用：pitch 视觉目标 - 实际 */
+    uint8_t  pitch_aim_valid;   /* 1=pitch 视觉目标可用（与 aim_valid 同源）*/
+    float    aim_rate;          /* yaw 视觉角速度前馈 deg/s（= 系数 × 视觉角速度）*/
+    float    pitch_aim_rate;    /* pitch 视觉角速度前馈 deg/s（= 0.6 × 视觉角速度）*/
+    float    aim_takeover;      /* 观察用：1=本拍由视觉接管（yaw/pitch 共用同一帧判定）*/
+    uint16_t aim_bad_frames;    /* 连续被闸门拒绝的视觉帧数（到限就退出接管）*/
+    uint32_t aim_reject_cnt;    /* 累计被闸门拒绝的帧数（排错用，只增不减）*/
+    uint32_t last_vision_frame; /* 上一拍见到的视觉有效帧计数（用于"是不是新的一帧"判定）*/
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */
     uint16_t dbus_offline_ms;      /* 遥控断线累计 ms */
     float imu_yaw;                 /* IMU 实测的云台世界朝向 deg（观察用）*/
@@ -327,7 +377,9 @@ void  Gimbal_Pitch_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* pitch_motor);
 float Gimbal_Get_Pitch(const GIMBAL_DRIVES* gimbal);
 
 /* 上层（弹道解算 / 自动瞄准）写入 pitch 目标角 deg。写完自动把 gimbal_pitch_auto 置 1，切到
-   "外部给目标"模式；该模式下遥控拨轮不再改变目标（避免和外部目标互相打架）。 */
+   "外部给目标"模式；该模式下遥控拨轮不再改变目标（避免和外部目标互相打架）。
+   ⚠️ 优先级：视觉自瞄接管中（gimbal->aim_takeover）时，视觉目标角【覆盖】本函数写入的值 ——
+      与参考工程一致（视觉的目标角写在最后）。 */
 void  Gimbal_Set_Pitch_Target(GIMBAL_DRIVES* gimbal, float deg);
 
 /* 切换 pitch 目标来源：1=外部（弹道/自瞄），0=纯遥控积分；切回 0 时目标角重置到当前实际角 */

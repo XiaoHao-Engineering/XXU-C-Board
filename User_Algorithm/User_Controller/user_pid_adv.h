@@ -52,6 +52,14 @@ typedef struct {
     /* ---- 运行时状态（pout/iout/dout/fout = 分项输出，integral = 积分累加器）---- */
     float set;
     float fdb;
+    /* ★★ 外部前馈（量纲 = 输出量纲），直接加在输出上：pout+iout+dout+fout+ff_ext。
+       云台 pitch 的"视觉角速度前馈"就灌在这里：本工程 pitch 是【外环角度(deg->RPM) +
+       内环速度(RPM->电流)】的串级，外环的输出就是内环（速度环）的目标 —— 所以
+       ff_ext = 目标角速度[deg/s] / 6 (RPM) 等价于参考工程 ita_robot.cpp:731 的
+       Motor_Pitch.Set_Feedforward_Omega()，即"叠加到速度环的目标上"。
+       ⚠️ 它是【指令】不是状态：PID_Adv_Init 的 memset 让它默认 0，
+          所以对现有使用者（只有云台 pitch）零影响；不用时必须显式写回 0。 */
+    float ff_ext;
     float out;
     float pout;
     float iout;
@@ -71,6 +79,8 @@ typedef struct {
 void PID_Adv_Init(PID_Adv_Controller* pid);
 
 void  PID_Adv_Set_Target(void* controller, float target);
+/* 外部前馈直接叠加到输出上（量纲 = 输出量纲）。不用时必须写回 0 */
+void  PID_Adv_Set_Feedforward(PID_Adv_Controller* pid, float ff);
 float PID_Adv_Calculate(void* controller, float main_feedback, float sub_feedback);
 float PID_Adv_Get_Output(void* controller);
 void  PID_Adv_Set_MaxOut(void* controller, float max_out);

@@ -32,6 +32,13 @@ void PID_Adv_Set_Target(void* controller, const float target) {
     pid->set = target;
 }
 
+/* 外部前馈：直接叠加到输出上（量纲 = 输出量纲）。云台 pitch 用它接"视觉角速度前馈"，
+   等价于参考工程 Motor_Pitch.Set_Feedforward_Omega()（见 user_pid_adv.h 的说明）。
+   ⚠️ 不用时必须显式写回 0，否则会一直带着上一次的残留前馈。 */
+void PID_Adv_Set_Feedforward(PID_Adv_Controller* pid, const float ff) {
+    pid->ff_ext = ff;
+}
+
 /* 清空运行时状态、保留配置参数；first_flag 清零 -> 下次 Calculate 重新走首拍保护 */
 void PID_Adv_Reset(void* controller) {
     PID_Adv_Controller* pid = (PID_Adv_Controller*)controller;
@@ -43,6 +50,7 @@ void PID_Adv_Reset(void* controller) {
     pid->iout = 0.0f;
     pid->dout = 0.0f;
     pid->fout = 0.0f;
+    pid->ff_ext = 0.0f;          /* 外部前馈也清掉：复位后不许带残留前馈再上线 */
     pid->error = 0.0f;
     pid->pre_error = 0.0f;
     pid->pre_now = 0.0f;
@@ -175,7 +183,9 @@ float PID_Adv_Calculate(void* controller, const float main_feedback, const float
     }
     pid->fout = pid->kf * target_rate;
 
-    pid->out = pid->pout + pid->iout + pid->dout + pid->fout;
+    /* ★ 外部前馈：与 P/I/D/F 一起求和后再统一限幅（前馈在回路外，不会影响稳定性，
+       但会被 max_out 一起夹住 —— 正常量级远小于 max_out，只有异常大前馈才会被吃）*/
+    pid->out = pid->pout + pid->iout + pid->dout + pid->fout + pid->ff_ext;
 
     if (pid->max_out > 0.0f) {
         if (pid->out > pid->max_out) {
