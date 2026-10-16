@@ -4,7 +4,9 @@
 /* 包含头文件 */
 #include <math.h>
 #include "../attitude.h"
+#if ATTITUDE_EKF_ENABLE
 #include "../user_quaternion_ekf.h"
+#endif
 
 /* 私有变量 */
 static ATTITUDE_DRIVES* attitude_drives[ATTITUDE_NUM];
@@ -33,9 +35,11 @@ void Attitude_Init(ATTITUDE_DRIVES* attitude, BMI088_DRIVES* user_bmi088, const 
     /* ★ 四元数 EKF 与互补滤波【并行】运行，不替换：先对比再决定用哪个。
        参数 (Q1 四元数过程噪声, Q2 零偏过程噪声, R 加速度计量测噪声, lambda 渐消因子, lpf)
        ⚠️ R 是按加速度计单位 m/s^2 整定的；若你的 accel 是 g，需乘 9.8^2 或把 accel 乘 9.8 */
+    #if ATTITUDE_EKF_ENABLE
     IMU_QuaternionEKF_Init(10.0f, 0.001f, 10000000.0f, 1.0f, 0.0f);
     attitude->qe_q[0] = 1.0f; attitude->qe_q[1] = 0.0f; attitude->qe_q[2] = 0.0f; attitude->qe_q[3] = 0.0f;
     attitude->qe_roll = 0.0f; attitude->qe_pitch = 0.0f; attitude->qe_yaw = 0.0f;
+    #endif
 
     BMI088_RegisterCallback(user_bmi088, Attitude_Update);
 
@@ -98,6 +102,7 @@ static void Attitude_Update(void* arg) {
         }
         attitude->yaw = Attitude_Wrap180(attitude->yaw_gyro - attitude->yaw_offset);
         /* 四元数 EKF：输入陀螺(rad/s，与 imu->gyro 同单位) + 加速度计(m/s^2) + dt */
+        #if ATTITUDE_EKF_ENABLE
         IMU_QuaternionEKF_Update(gx * ATTITUDE_DEG2RAD, gy * ATTITUDE_DEG2RAD, gz * ATTITUDE_DEG2RAD,
                                  ax, ay, az, dt);
         attitude->qe_roll = QEKF_INS.Roll;
@@ -105,6 +110,7 @@ static void Attitude_Update(void* arg) {
         attitude->qe_yaw = QEKF_INS.Yaw;
         attitude->qe_q[0] = QEKF_INS.q[0]; attitude->qe_q[1] = QEKF_INS.q[1];
         attitude->qe_q[2] = QEKF_INS.q[2]; attitude->qe_q[3] = QEKF_INS.q[3];
+        #endif
 
         attitude->update_cnt++;
     }

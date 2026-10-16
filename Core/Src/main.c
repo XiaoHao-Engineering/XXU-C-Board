@@ -77,6 +77,15 @@ static uint8_t Chassis_Source_Valid(void) {
   * @brief  The application entry point.
   * @retval int
   */
+/* ★★ 启动进度播报宏：用来定位"卡在哪一步"。
+   每过一关就往【绘图口 USART6】和【视觉口 USART1】各发一行 ASCII。
+   排查完可以整段删掉，不影响功能。 */
+#define BOOT_TRACE(tag) do {                                        \
+    static const char _bt[] = "\r\n[BOOT] " tag "\r\n";              \
+    HAL_UART_Transmit(&huart6, (uint8_t*)_bt, sizeof(_bt) - 1, 200); \
+    HAL_UART_Transmit(&huart1, (uint8_t*)_bt, sizeof(_bt) - 1, 200); \
+} while (0)
+
 int main(void)
 {
 
@@ -112,6 +121,7 @@ int main(void)
   MX_CAN2_Init();
   MX_TIM10_Init();
   MX_USART6_UART_Init();
+    BOOT_TRACE("M1 gpio/dma/uart inits OK");
   /* USER CODE BEGIN 2 */
   /* JScope 采样节拍：TIM10 跑 10kHz（C 板蜂鸣器占 TIM4_CH3，PWM_Set_Frequency 会改
      TIM4 的 ARR，节拍不能挂 TIM4；PF6 上的加热通道不启动）*/
@@ -170,6 +180,7 @@ int main(void)
   SPI_Init(&user_spi_gyro, &hspi1, IMU_CS_GYRO_GPIO_Port, IMU_CS_GYRO_Pin);
   BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 1);
   Attitude_Init(&user_attitude, &user_bmi088, 0.001f);
+    BOOT_TRACE("M2 IMU + attitude OK");
 
   UART_Init(&user_serialplot_uart, &huart6);
 
@@ -249,6 +260,7 @@ int main(void)
 #endif /* SHOOTER_ENABLE */
 
   ChassisControl_Init(&user_chassis, &user_dbus);
+    BOOT_TRACE("M4 chassis_control OK - plot should start");
     /* ★ 启动进度标记：走到这里说明绘图通道已登记，串口上应该开始出数据了。
        若三个口都收不到这行字，说明卡在更早的初始化（那就是初始化问题，不是绘图问题）。 */
     {
