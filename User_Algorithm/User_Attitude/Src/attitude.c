@@ -41,6 +41,8 @@ void Attitude_Init(ATTITUDE_DRIVES* attitude, BMI088_DRIVES* user_bmi088, const 
        参数 (Q1 四元数过程噪声, Q2 零偏过程噪声, R 加速度计量测噪声, lambda 渐消因子, lpf)
        ⚠️ R 是按加速度计单位 m/s^2 整定的；若你的 accel 是 g，需乘 9.8^2 或把 accel 乘 9.8 */
     #if ATTITUDE_EKF_ENABLE
+    /* ★ Mahony 互补滤波初始化（放在 EKF 那段之外，EKF 关着也会跑）*/
+    AHRS_Init(&attitude->ahrs, AHRS_KP_DEF, AHRS_KI_DEF, AHRS_ACC_LPF_DEF);
     IMU_QuaternionEKF_Init(10.0f, 0.001f, 10000000.0f, 1.0f, 0.0f);
     attitude->qe_q[0] = 1.0f; attitude->qe_q[1] = 0.0f; attitude->qe_q[2] = 0.0f; attitude->qe_q[3] = 0.0f;
     attitude->qe_roll = 0.0f; attitude->qe_pitch = 0.0f; attitude->qe_yaw = 0.0f;
@@ -117,6 +119,19 @@ static void Attitude_Update(void* arg) {
         attitude->qe_q[2] = QEKF_INS.q[2]; attitude->qe_q[3] = QEKF_INS.q[3];
         #endif
 
+#if ATTITUDE_AHRS_ENABLE
+        /* ★ Mahony AHRS：陀螺(rad/s) + 加速度计 -> wxyz 四元数。
+           输出同样写进 qe_q[]，所以 gimbal.c 里发给视觉的那段代码完全不用改 */
+        AHRS_Update(&attitude->ahrs, gx * ATTITUDE_DEG2RAD, gy * ATTITUDE_DEG2RAD,
+                    gz * ATTITUDE_DEG2RAD, ax, ay, az, dt);
+        attitude->qe_q[0] = attitude->ahrs.q[0];
+        attitude->qe_q[1] = attitude->ahrs.q[1];
+        attitude->qe_q[2] = attitude->ahrs.q[2];
+        attitude->qe_q[3] = attitude->ahrs.q[3];
+        attitude->qe_roll  = attitude->ahrs.roll;
+        attitude->qe_pitch = attitude->ahrs.pitch;
+        attitude->qe_yaw   = attitude->ahrs.yaw;
+#endif
         attitude->update_cnt++;
     }
 }

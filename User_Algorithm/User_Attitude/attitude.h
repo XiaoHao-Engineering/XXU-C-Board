@@ -6,6 +6,7 @@
 #ifdef HAL_SPI_MODULE_ENABLED
 
 #include "../../User_Drives/User_Sensor/user_bmi088.h"
+#include "user_ahrs.h"
 #include "../../User_Algorithm/user_cf.h"
 #include "../../Core/Inc/bsp_config.h"
 
@@ -24,6 +25,8 @@
    替代方案：自己写一个 Mahony/Madgwick 互补滤波（无矩阵库、不 malloc、~80 行），
    同样输出 wxyz 四元数，且能顺带估计陀螺零偏。 */
 #define ATTITUDE_EKF_ENABLE     (0)
+/* ★ Mahony 互补滤波（替代那个会跑飞的 EKF）：=1 时输出 qe_q[4] 四元数给视觉 */
+#define ATTITUDE_AHRS_ENABLE    (1)
 
 /* 可调参数 --------------------------------------------------------------*/
 
@@ -55,6 +58,8 @@ typedef struct {
     float yaw_rate;                 /* 世界系 yaw 角速度 deg/s（已按俯仰投影补偿），给云台做阻尼 */
     float qe_roll, qe_pitch, qe_yaw;   /* 四元数 EKF 解算的欧拉角 deg（与互补滤波并行对比）*/
     float qe_q[4];                     /* 四元数 EKF 的 q = w,x,y,z（回传给视觉用）*/
+    /* ★ Mahony AHRS 状态（真正在跑的四元数解算）*/
+    AHRS_DRIVES ahrs;
     float yaw_offset;               /* 偏航零位偏移 */
     uint32_t update_cnt;            /* 更新次数 */
 } ATTITUDE_DRIVES;

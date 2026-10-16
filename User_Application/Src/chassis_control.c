@@ -480,6 +480,10 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
        外环=角度环(deg->RPM)，内环=速度环(RPM->电流)；⚠️ pitch_spd_ki 不要为 0，顶重力
        靠【内环】积分。_da=低通 _dz=死区 _ia/_ib=变速积分 _is=分离 _mo/_mi/_md=三段限幅 */
     {"pitch_ch",     &user_gimbal.pitch_rc_ch, 0.0f,   3.0f, NULL},
+    /* ★ Mahony AHRS 增益（在线可调）：kp 越大越信加速度计；ki>0 才会估陀螺零偏 */
+    {"ahrs_kp",   &user_attitude.ahrs.kp,      0.0f, 10.0f,  NULL},
+    {"ahrs_ki",   &user_attitude.ahrs.ki,      0.0f,  0.5f,  NULL},
+    {"ahrs_alpf", &user_attitude.ahrs.acc_lpf, 0.0f,  1.0f,  NULL},
     {"pitch_dead",   &user_gimbal.pitch_dead, 0.0f, 200.0f, NULL},
     {"pitch_max_w",  &user_gimbal.pitch_max_w, 0.0f, 360.0f, NULL},
     {"pitch_auto",   &user_gimbal.pitch_auto,  0.0f,   1.0f, NULL},
