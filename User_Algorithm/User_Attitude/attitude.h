@@ -18,15 +18,16 @@
    确认 EKF 安全后再改成 1。 */
 /* ⚠️ 2026-10 实测结论：参考工程移植来的 QuaternionEKF 【开启就会让系统跑飞】——
    V3.6(关) 时串口绘图 100sps 正常；V3.8(开) 后所有串口一个字节都没有。
-   原因基本确定：它用的是 Kalman_Filter_Init_Static_6_0_3（静态初始化 6 状态），
-   而 QuaternionEKF 内部按 7 状态（四元数4 + 陀螺零偏3）使用，
-   矩阵尺寸不匹配 -> 越界写内存 -> 启动即跑飞。
-   => 结论：这个 EKF 不能用，除非重写它的矩阵尺寸。
-   替代方案：自己写一个 Mahony/Madgwick 互补滤波（无矩阵库、不 malloc、~80 行），
-   同样输出 wxyz 四元数，且能顺带估计陀螺零偏。 */
+   ★ 2026-10 重新查证（逐行 diff + 子代理分析）后的更正：
+   本段早先写的"6状态/7状态矩阵尺寸不匹配导致越界"是【错误推断】，已作废。
+   事实：QuaternionEKF 就是 6 状态 / 3 量测，静态缓冲区 P/F/Q[36]、H/HT/K[18]、R[9] 尺寸精确匹配，
+        且 user_quaternion_ekf.c / user_kalman_filter.c 与参考工程【逐行完全一致】。
+   真正的跑飞原因：本工程是【软浮点】+ SPI 只有 328kHz（读 IMU 花 463us）+ SysTick 优先级最低，
+        三者叠加使 1ms 任务超时 -> SysTick 中断背靠背重入 -> 主循环饿死 -> 所有串口无输出。
+   对策：开硬件 FPU、提高 SPI 分频、把 EKF 移出中断（见 main.c / CMakeLists）。 */
 #define ATTITUDE_EKF_ENABLE     (0)
 /* ★ Mahony 互补滤波（替代那个会跑飞的 EKF）：=1 时输出 qe_q[4] 四元数给视觉 */
-#define ATTITUDE_AHRS_ENABLE    (1)
+#define ATTITUDE_AHRS_ENABLE    (0)
 
 /* 可调参数 --------------------------------------------------------------*/
 

@@ -32,7 +32,7 @@ endif()
 # ⚠️ CMSIS-DSP 必须跟着源码一起编（Drivers/CMSIS/DSP/Source）：
 #    Middlewares 里的 libarm_cortexM4lf_math.a 是【硬件浮点 ABI】的预编译库，
 #    和这里的软浮点工程 ABI 不兼容，arm_sin_cos_f32 / arm_sin_f32 会取错参数。
-add_compile_options(-mcpu=cortex-m4 -mthumb)
+add_compile_options(-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 add_compile_options(-ffunction-sections -fdata-sections -fno-common -fmessage-length=0)
 add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-x$<SEMICOLON>assembler-with-cpp>)
 
@@ -43,7 +43,7 @@ elseif (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
 elseif (CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
     add_compile_options(-Os)
 else ()
-    add_compile_options(-Og -g)
+    add_compile_options(-O2 -g)
 endif ()
 
 include_directories(

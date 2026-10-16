@@ -118,6 +118,15 @@ int main(void)
   MX_TIM4_Init();
   MX_I2C2_Init();
   MX_SPI1_Init();
+    /* ★★ 性能关键：CubeMX 生成的 spi.c 里 BaudRatePrescaler = 256
+       -> APB2 84MHz/256 = 328 kHz，读一次 IMU(19字节) 要 ≈463us，占满 1ms 预算的 46%！
+       BMI088 的 SPI 支持到 10MHz，这里提到 84/16 = 5.25MHz -> 同一次读取降到 ≈29us。
+       放在这里而不是改 spi.c，是为了不被下次 CubeMX 重新生成覆盖掉。
+       （建议同时在 CubeMX 里把 SPI1 的 Prescaler 也改成 16，保持两边一致）*/
+    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+    if (HAL_SPI_Init(&hspi1) != HAL_OK) {
+        Error_Handler();
+    }
   MX_CAN2_Init();
   MX_TIM10_Init();
   MX_USART6_UART_Init();
