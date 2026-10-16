@@ -88,6 +88,12 @@ MODE_NAMES = {
     #     vtgt 视觉目标角 / vyaw 实际世界角 / verr 误差
     #     vdelay 延迟补偿ms / vok 数据有效 / vfps 视觉帧数
     5: ["vtgt", "vyaw", "verr", "vdelay", "vok", "vfps"],
+    # 6 = 四元数 / 姿态调试
+    #     qw qx qy qz  <- 通过 UART1 发给视觉的四元数(wxyz)
+    #     qroll qpitch qyaw <- EKF 欧拉角 deg
+    #     cf_pitch     <- 互补滤波 pitch deg（对比）
+    #   ★ 静止 qw≈1、其余≈0；qw²+qx²+qy²+qz² 应恒为 1
+    6: ["qw", "qx", "qy", "qz", "qroll", "qpitch", "qyaw", "cf_pitch"],
 }
 
 DEFAULT_MODE = 2        # 和固件 chassis_config.h 的 CHASSIS_SERIALPLOT_MODE 一致

@@ -96,6 +96,19 @@ static int16_t RC_Channel(const uint8_t ch) {
     switch (ch) {
         case 0:  return s_dbus->ch0;
         case 1:  return s_dbus->ch1;
+        case 6:
+            /* 四元数 / 姿态调试（8 通道）：
+               qw qx qy qz  <- ★ 这 4 个就是通过 UART1 发给视觉的四元数（w,x,y,z）
+               qroll qpitch qyaw <- EKF 解算的欧拉角 deg
+               cf_pitch     <- 互补滤波的 pitch deg（与 EKF 对比用）
+               ★ 静止时 qw≈1、qx/qy/qz≈0，且 qw^2+qx^2+qy^2+qz^2 应恒为 1
+               ★ 转动云台时四个都会变；若范数不是 1，说明 EKF 有问题 */
+            Serialplot_Set_Data(&user_serialplot, 8,
+                                &user_attitude.qe_q[0], &user_attitude.qe_q[1],
+                                &user_attitude.qe_q[2], &user_attitude.qe_q[3],
+                                &user_attitude.qe_roll, &user_attitude.qe_pitch,
+                                &user_attitude.qe_yaw, &user_attitude.pitch);
+            break;
         case 2:  return s_dbus->ch2;
         case 3:  return s_dbus->ch3;
         default: return 0;
@@ -209,6 +222,19 @@ static void Chassis_Apply_Plot_Mode(void) {
                                 &user_gimbal.aim_ok_f, &user_vision.frame_count_f);
             break;
 
+        case 6:
+            /* 四元数 / 姿态调试（8 通道）：
+               qw qx qy qz  <- ★ 这 4 个就是通过 UART1 发给视觉的四元数（w,x,y,z）
+               qroll qpitch qyaw <- EKF 解算的欧拉角 deg
+               cf_pitch     <- 互补滤波的 pitch deg（与 EKF 对比用）
+               ★ 静止时 qw≈1、qx/qy/qz≈0，且 qw^2+qx^2+qy^2+qz^2 应恒为 1
+               ★ 转动云台时四个都会变；若范数不是 1，说明 EKF 有问题 */
+            Serialplot_Set_Data(&user_serialplot, 8,
+                                &user_attitude.qe_q[0], &user_attitude.qe_q[1],
+                                &user_attitude.qe_q[2], &user_attitude.qe_q[3],
+                                &user_attitude.qe_roll, &user_attitude.qe_pitch,
+                                &user_attitude.qe_yaw, &user_attitude.pitch);
+            break;
         case 2:
             /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
                gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */

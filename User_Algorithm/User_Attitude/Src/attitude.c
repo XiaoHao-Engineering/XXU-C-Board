@@ -32,6 +32,11 @@ void Attitude_Init(ATTITUDE_DRIVES* attitude, BMI088_DRIVES* user_bmi088, const 
     attitude->update_cnt = 0;
 
     CF_Init(&attitude->cf_pitch, ATTITUDE_CF_TC, dt);
+    /* ★ 四元数初值 = 单位四元数。EKF 收敛前（或 EKF 关闭时）就发这个，
+       绝不能发 (0,0,0,0) —— 那不是合法四元数，视觉解出来会是 NaN。 */
+    attitude->qe_q[0] = 1.0f; attitude->qe_q[1] = 0.0f;
+    attitude->qe_q[2] = 0.0f; attitude->qe_q[3] = 0.0f;
+
     /* ★ 四元数 EKF 与互补滤波【并行】运行，不替换：先对比再决定用哪个。
        参数 (Q1 四元数过程噪声, Q2 零偏过程噪声, R 加速度计量测噪声, lambda 渐消因子, lpf)
        ⚠️ R 是按加速度计单位 m/s^2 整定的；若你的 accel 是 g，需乘 9.8^2 或把 accel 乘 9.8 */
