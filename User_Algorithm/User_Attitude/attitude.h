@@ -25,7 +25,7 @@
    真正的跑飞原因：本工程是【软浮点】+ SPI 只有 328kHz（读 IMU 花 463us）+ SysTick 优先级最低，
         三者叠加使 1ms 任务超时 -> SysTick 中断背靠背重入 -> 主循环饿死 -> 所有串口无输出。
    对策：开硬件 FPU、提高 SPI 分频、把 EKF 移出中断（见 main.c / CMakeLists）。 */
-#define ATTITUDE_EKF_ENABLE     (0)
+#define ATTITUDE_EKF_ENABLE     (1)
 /* ★ Mahony 互补滤波（替代那个会跑飞的 EKF）：=1 时输出 qe_q[4] 四元数给视觉 */
 #define ATTITUDE_AHRS_ENABLE    (0)
 

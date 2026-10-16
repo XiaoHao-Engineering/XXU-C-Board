@@ -50,7 +50,7 @@
    ★ 判定方法：只转 pitch（枪管）时看绘图模式 6 的 qpitch 变不变
        变 -> IMU 在 pitch 框架上 -> 填 1
        不变 -> IMU 在 yaw 框架上   -> 填 0（本车默认） */
-#define VISION_PITCH_USE_IMU_ONLY   (0)
+#define VISION_PITCH_USE_IMU_ONLY   (1)
 
 /* ★ 弹速换算系数：弹速[m/s] = 摩擦轮角速度[rad/s] × 本系数
    （参考工程用的就是 0.03。★ 必须实测标定：换个摩擦轮/电压就得重标）*/
