@@ -119,8 +119,13 @@ int main(void)
   TIMER_Init(&user_timer_10, &htim10, TIM10_CLK);
   TIMER_RegisterCallback(&user_timer_10, ChassisControl_JScopeCallback);
 
-  UART_Init(&user_imu_uart, &huart3);
-
+    /* ★★ HWT906（串口姿态传感器）本车【不使用】，已整段停用。
+       原因一：没接、没用到。
+       原因二（更关键）：它和【遥控接收机 DBUS】共用 USART3 ——
+              两个驱动在同一 UART 上各自跑 DMA 收包会互相破坏，
+               可能在中断里跑飞 -> 表现就是"所有串口都没有输出"。
+       将来真要用 HWT906，必须给它单独分配一个空闲 UART，不能再与 DBUS 共用。
+    // UART_Init(&user_imu_uart, &huart3);
   /* 状态灯：C 板是 RGB 三色灯，红 = PH12，绿 = PH11，低电平点亮 */
   LED_Init(&user_red_led, LED_RED_GPIO_Port, LED_RED_Pin, 1);
   LED_Init(&user_green_led, LED_GREEN_GPIO_Port, LED_GREEN_Pin, 1);
@@ -159,8 +164,7 @@ int main(void)
 
   /* 遥控器（C 板 DBUS 走 USART3：PC10/PC11，100000 + 8E1）与姿态传感器 */
   DBUS_Init(&user_dbus, &huart3);
-  HWT906_Init(&user_imu, &user_imu_uart);
-
+    // HWT906_Init(&user_imu, &user_imu_uart);   /* 同上：未使用，且会与 DBUS 抢 USART3 */
   /* 板载 IMU：SPI1 + 姿态解算（BMI088 双片选：加速度 PA4 / 陀螺 PB0） */
   SPI_Init(&user_spi_accel, &hspi1, IMU_CS_ACCEL_GPIO_Port, IMU_CS_ACCEL_Pin);
   SPI_Init(&user_spi_gyro, &hspi1, IMU_CS_GYRO_GPIO_Port, IMU_CS_GYRO_Pin);
@@ -245,7 +249,14 @@ int main(void)
 #endif /* SHOOTER_ENABLE */
 
   ChassisControl_Init(&user_chassis, &user_dbus);
-
+    /* ★ 启动进度标记：走到这里说明绘图通道已登记，串口上应该开始出数据了。
+       若三个口都收不到这行字，说明卡在更早的初始化（那就是初始化问题，不是绘图问题）。 */
+    {
+        static const char boot_ok[] = "\r\n[BOOT] chassis_control OK - plot should start\r\n";
+        HAL_UART_Transmit(&huart1, (uint8_t*)boot_ok, sizeof(boot_ok) - 1, 200);
+        HAL_UART_Transmit(&huart3, (uint8_t*)boot_ok, sizeof(boot_ok) - 1, 200);
+        HAL_UART_Transmit(&huart6, (uint8_t*)boot_ok, sizeof(boot_ok) - 1, 200);
+    }
   ChassisControl_Set_HeadingSource(Chassis_Heading_Get);
   ChassisControl_Set_SourceValid(Chassis_Source_Valid);
   SysTick_InitTask(&chassis_task, NULL, CHASSIS_PERIOD_MS, CHASSIS_PERIOD_MS,
