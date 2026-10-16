@@ -6,7 +6,7 @@
 #include "../User_Drives/User_Motor/user_dji_motor.h"
 #include "../User_Algorithm/User_Controller/user_pid.h"
 #include "../User_Algorithm/User_Controller/user_pid_adv.h"
-#include "../User_Algorithm/User_Controller/user_cascade.h"
+#include "../User_Algorithm/User_Controller/user_cascade.h"    //实测625S左右零飘偏一度（10分钟）
 
 /* 云台 yaw 配置 */
 /* 锁世界方向（用 Rotor_speed 模式，见 main.c）：推杆 = 世界系里恒速转，松杆 = 锁当前方向、
