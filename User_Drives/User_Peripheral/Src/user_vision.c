@@ -36,6 +36,20 @@ uint16_t Vision_CRC16(const uint8_t* data, uint16_t len) {
     return crc;
 }
 
+/* ★★ 视觉发送改由【主循环】驱动（不再挂 1ms SysTick 任务）：
+   这样 UART 收发完全不占 1ms 中断预算，主循环慢一点只是发送率略降，不影响功能。
+   发送周期由 HAL_GetTick() 自计时限制为 VISION_TX_PERIOD_MS（默认 10ms=100Hz）。
+   注：这里的 HAL_GetTick 在主循环里是正常推进的（不会像在 ISR 里那样被冻住）。*/
+static uint32_t s_vision_last_tx_ms = 0U;
+
+static void Vision_LoopHandle(void) {
+    const uint32_t now = HAL_GetTick();
+    if ((uint32_t)(now - s_vision_last_tx_ms) < VISION_TX_PERIOD_MS) {
+        return;                     /* 还没到下一个发送周期，直接返回 */
+    }
+    s_vision_last_tx_ms = now;
+    Vision_Update(&user_vision);
+}
 void Vision_Init(VISION_DRIVES* vision, UART_DRIVES* uart) {
     vision->uart = uart;
 
@@ -73,8 +87,10 @@ void Vision_Init(VISION_DRIVES* vision, UART_DRIVES* uart) {
     UART_RegisterCallback(uart, Vision_Handle);
 
     /* 1kHz 任务：发包 + 离线判定。延迟 100ms 启动，让 UART 先跑起来 */
-    SysTick_InitTask(&vision->task, vision, 100, VISION_TX_PERIOD_MS, Task_REPEAT, Vision_Update);
-    SysTick_StartTask(&vision->task);
+    /* ★ 发送任务注册到【主循环事件表】（与 CAN/UART 队列处理同一机制），
+       不再用 SysTick_InitTask —— 彻底从 1ms 中断里移出来 */
+    loop_event[loop_event_num] = &Vision_LoopHandle;
+    loop_event_num++;    SysTick_StartTask(&vision->task);
 
     vision_drives[vision_num] = vision;
     vision_num++;
