@@ -35,8 +35,11 @@ def analyse(buf):
     print('  找到 %d 个 0xAB；相邻间距出现最多的是：%s'
           % (len(pos), ', '.join('%d字节×%d次' % (g, c) for g, c in gaps.most_common(4))))
 
+    # ★ 真帧长 = 相邻帧头的间距。用它当硬约束，只保留间距吻合的候选，
+    #   否则"无校验"的候选会全部假通过（它没有可验证的东西）。
+    dom = gaps.most_common(1)[0][0] if gaps else -1
     print('')
-    print('  穷举验证（对每个 0xAB 位置都试一遍）：')
+    print('  穷举验证（以相邻帧头间距 %d 字节为硬约束）：' % dom)
     hit = []
     for n in range(1, 13):
         for cs in (True, False):
@@ -53,7 +56,7 @@ def analyse(buf):
                         bad += 1
                 else:
                     ok += 1
-            if ok >= 3 and bad == 0:
+            if ok >= 3 and bad == 0 and flen == dom:
                 hit.append((n, cs, flen, ok))
                 print('    ★ 完全匹配：%2d 通道, 校验=%-5s 帧长=%2d 字节, 通过 %d 帧'
                       % (n, '有(和)' if cs else '无', flen, ok))
