@@ -30,7 +30,10 @@
 
 /* 宏定义 ------------------------------------------------------------------*/
 
-#define VISION_FRAME_HEAD        "AA"    /* 帧头字符串（RingBuffer 取帧按它搜索）*/
+#define VISION_FRAME_HEAD        "AA"    /* ⚠️ 帧头是【两个 ASCII 字符 A A】= 字节 41 41，
+                                                 不是十六进制的单字节 0xAA！
+                                                 在串口助手 HEX 里要按 41 41 找。
+                                                 （命名沿用参考工程，RingBuffer 取帧按此串搜索）*/
 #define VISION_OFFLINE_MS        (50U)   /* 连续多少 ms 没收到有效帧 = 视觉离线 */
 #define VISION_RX_PACKET_SIZE    (29U)   /* 视觉 -> 电控 帧长 */
 #define VISION_TX_PACKET_SIZE    (43U)   /* 电控 -> 视觉 帧长 */
