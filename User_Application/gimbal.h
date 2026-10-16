@@ -58,7 +58,7 @@
      ③ 接管条件 = 使能 && 视觉在线 && mode != NO_CONTROL。
    与参考的差别（本工程比参考完整）：保留了下面的 aim_delay_ms 延迟外推，
    并额外加了一道【数据有效性闸门】（参考工程几乎没有无效值保护，见 GIMBAL_AIM_* 一段）。 */
-#define GIMBAL_YAW_AUTO_DEF     (0.0f)     /* 0=摇杆 1=视觉接管（在线调 yaw_auto）*/
+#define GIMBAL_YAW_AUTO_DEF     (1.0f)  /* 0=摇杆 1=视觉接管（在线调 yaw_auto）。★上电即开：六道保护闸同版已在，视觉离线/mode=0/NaN/越界/跳变 时完全不接管，云台照旧听摇杆 */
 #define GIMBAL_CAM_YAW_OFF      (0.0f)     /* 相机光轴与枪管的水平零位偏置 deg */
 #define GIMBAL_CAM_PITCH_OFF    (0.0f)     /* 相机光轴与枪管的俯仰零位偏置 deg（打靶标定）*/
 /* ★★ 前馈系数与参考工程逐项对齐：
