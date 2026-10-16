@@ -97,14 +97,40 @@ void NMI_Handler(void)
   */
 void HardFault_Handler(void)
 {
-  /* USER CODE BEGIN HardFault_IRQn 0 */
+    /* ★★ 跑飞捕获：一旦进这里，用【直接写寄存器】的方式往三个串口各发一行，
+       完全不依赖 HAL 状态机/中断/DMA（它们在故障时可能已经不可用）。
+       CFSR/HFSR 与压栈 PC 一并打出，便于定位是哪类故障、死在哪个地址。
+       确认稳定后可以把这个函数体简化回 while(1)。*/
+    uint32_t* sp;
+    __asm volatile ("TST LR, #4\n\tITE EQ\n\tMRSEQ %0, MSP\n\tMRSNE %0, PSP" : "=r"(sp));
+    const uint32_t cfsr = SCB->CFSR;
+    const uint32_t hfsr = SCB->HFSR;
+    const uint32_t pc   = sp[6];
+    USART_TypeDef* const uarts[3] = { USART1, USART3, USART6 };
+    char buf[64];
+    uint8_t n = 0;
+    const char* tag = "\r\n!!! HARDFAULT cfsr=0x";
+    while (*tag) { buf[n++] = *tag++; }
+    for (int8_t i = 28; i >= 0; i -= 4) { buf[n++] = "0123456789ABCDEF"[(cfsr >> i) & 0xF]; }
+    tag = " hfsr=0x";
+    while (*tag) { buf[n++] = *tag++; }
+    for (int8_t i = 28; i >= 0; i -= 4) { buf[n++] = "0123456789ABCDEF"[(hfsr >> i) & 0xF]; }
+    tag = " pc=0x";
+    while (*tag) { buf[n++] = *tag++; }
+    for (int8_t i = 28; i >= 0; i -= 4) { buf[n++] = "0123456789ABCDEF"[(pc >> i) & 0xF]; }
+    buf[n++] = '!'; buf[n++] = '\r'; buf[n++] = '\n';
 
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
+    for (uint8_t k = 0; k < 3U; k++) {
+        for (uint8_t j = 0; j < n; j++) {
+            volatile uint32_t guard = 0U;
+            while (((uarts[k]->SR & USART_SR_TXE) == 0U) && (guard < 2000000U)) { guard++; }
+            uarts[k]->DR = (uint8_t)buf[j];
+        }
+    }
+    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
+
+    while (1) {
+    }
 }
 
 /**

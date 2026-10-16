@@ -33,7 +33,6 @@ void SysTick_InitTask(SysTick_Task *Task, void *arg, uint32_t delay, uint32_t pe
 void SysTick_StartTask(SysTick_Task *Task);
 void SysTick_StopTask(SysTick_Task *Task);
 void SysTick_ResetTask(SysTick_Task *Task);
-void SysTick_DeleteTask(SysTick_Task *Task);
 void SysTick_Handle(void);
 
 #endif // USER_SYSTICK_H

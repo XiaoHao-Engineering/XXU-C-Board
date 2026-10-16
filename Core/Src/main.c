@@ -96,6 +96,14 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+    /* ★★ 硬件 FPU 必须在使用任何浮点指令之前打开，否则第一条 VFP 指令就是 NoCP 异常 -> 上电即跑飞。
+       正常路径是 SystemInit() 里根据 __FPU_USED 自动开；这里再显式开一次做保险
+       （与 CMakeLists 里的 -mfpu=fpv4-sp-d16 -mfloat-abi=hard 配套）。幂等，可重复执行。*/
+#if (__FPU_PRESENT == 1U)
+    SCB->CPACR |= ((3UL << (10U * 2U)) | (3UL << (11U * 2U)));
+    __DSB();
+    __ISB();
+#endif
   HAL_Init();
 
   /* USER CODE BEGIN Init */
