@@ -45,3 +45,7 @@ Desktop.ini
 
 # ---- 本地个人配置（想提交就删掉这几行）----
 # .vscode/settings.json
+
+# Python 缓存（跑 tools/*.py 时会生成）
+__pycache__/
+*.pyc
