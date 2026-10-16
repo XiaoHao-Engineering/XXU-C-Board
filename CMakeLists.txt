@@ -93,6 +93,14 @@ set(CMSIS_DSP_SRC
         Drivers/CMSIS/DSP/Source/FilteringFunctions/arm_fir_f32.c
         Drivers/CMSIS/DSP/Source/FilteringFunctions/arm_fir_init_f32.c
         Drivers/CMSIS/DSP/Source/CommonTables/arm_common_tables.c
+        # 矩阵运算：user_quaternion_ekf / user_kalman_filter 用（四元数 EKF 的姿态解算）
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_init_f32.c
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_add_f32.c
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_sub_f32.c
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_mult_f32.c
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_trans_f32.c
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_inverse_f32.c
+        Drivers/CMSIS/DSP/Source/MatrixFunctions/arm_mat_scale_f32.c
 )
 
 # 驱动库单独扫：不加 CONFIGURE_DEPENDS（这棵树不会变，省掉每次构建的目录扫描），

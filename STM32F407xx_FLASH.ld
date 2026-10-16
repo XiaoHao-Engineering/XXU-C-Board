@@ -75,7 +75,7 @@ _sstack = _estack - _Min_Stack_Size;
          射击模块两个滤波器就是 192 字节；另有大疆电机每个 CAN 总线的任务节点
          （2×28 = 56 字节）。原 512 字节余量太小。
    RAM 只用到 ~26%，加这 1.5KB 完全不影响。 */
-_Min_Heap_Size = 0x400;      /* required amount of heap  */
+_Min_Heap_Size = 0x2000;      /* required amount of heap  */
 _Min_Stack_Size = 0x800; /* required amount of stack */
 
 /* Define output sections */
