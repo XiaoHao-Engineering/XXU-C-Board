@@ -73,7 +73,7 @@ void Vision_Init(VISION_DRIVES* vision, UART_DRIVES* uart) {
     UART_RegisterCallback(uart, Vision_Handle);
 
     /* 1kHz 任务：发包 + 离线判定。延迟 100ms 启动，让 UART 先跑起来 */
-    SysTick_InitTask(&vision->task, vision, 100, 1, Task_REPEAT, Vision_Update);
+    SysTick_InitTask(&vision->task, vision, 100, VISION_TX_PERIOD_MS, Task_REPEAT, Vision_Update);
     SysTick_StartTask(&vision->task);
 
     vision_drives[vision_num] = vision;
@@ -127,7 +127,7 @@ static void Vision_Handle(void* user_uart) {
     }
 }
 
-/* 1kHz：发包 + 离线判定 */
+/* 周期任务：发包 + 离线判定 */
 static void Vision_Update(void* arg) {
     VISION_DRIVES* vision = (VISION_DRIVES*)arg;
 

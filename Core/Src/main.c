@@ -167,7 +167,7 @@ int main(void)
   BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 1);
   Attitude_Init(&user_attitude, &user_bmi088, 0.001f);
 
-  UART_Init(&user_serialplot_uart, &huart6);
+  UART_Init(&user_serialplot_uart, &huart1);
 
   /* ---- 串口自检探针 ----------------------------
      阻塞发送，绕过 TX 队列和 DMA，用来定位故障：
@@ -184,7 +184,7 @@ int main(void)
                   CHASSIS_SERIALPLOT_PERIOD_MS);
 
     /* 视觉链路（与算法组的自瞄对接）：UART1 */
-    UART_Init(&user_vision_uart, &huart1);
+    UART_Init(&user_vision_uart, &huart6);
     Vision_Init(&user_vision, &user_vision_uart);
   /* 绘图通道在 Chassis_Apply_Plot_Mode() 里按 CHASSIS_SERIALPLOT_MODE 登记，可在线切 */
 

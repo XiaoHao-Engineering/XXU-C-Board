@@ -35,6 +35,10 @@
 #define VISION_RX_PACKET_SIZE    (29U)   /* 视觉 -> 电控 帧长 */
 #define VISION_TX_PACKET_SIZE    (43U)   /* 电控 -> 视觉 帧长 */
 #define VISION_RX_MAX_PER_LOOP   (4U)    /* 单次回调最多取几帧，防止一次吃太多 */
+/* ★ 发包周期 ms：一帧 43 字节，115200 下一个 UART 最多约 11520 B/s。
+   1ms(1kHz) = 43kB/s 远远超出，会把发送队列灌满、UART 长期忙 -> 必须放慢。
+   10ms(100Hz) = 4.3kB/s，占带宽约 37%，够用且稳妥。 */
+#define VISION_TX_PERIOD_MS      (10U)    /* 单次回调最多取几帧，防止一次吃太多 */
 
 /* 电控 -> 视觉 的工作模式 */
 #define VISION_TX_MODE_IDLE       (0)    /* 不参与 */
