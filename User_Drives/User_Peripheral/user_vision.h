@@ -34,6 +34,23 @@
                                                  不是十六进制的单字节 0xAA！
                                                  在串口助手 HEX 里要按 41 41 找。
                                                  （命名沿用参考工程，RingBuffer 取帧按此串搜索）*/
+/* ★★ 视觉包内角度单位（必须与视觉保持一致！）
+   参考工程内部角度【全部是弧度】(dvc_bmi088.h 的 Yaw总角度(rad)、dvc_motor.h 的
+   外部角度反馈值(rad)、crt_gimbal.h 的 pitch 限位 -0.446/0.81 rad)，且 dvc_vision
+   解析后【原值透传不做换算】-> 所以包里的 yaw/pitch/yaw_vel/pitch_vel 都是【弧度/弧度每秒】。
+   本工程内部惯用【度】，因此在收发边界统一换算，开关放在这里：
+     1 = 包内是弧度（与参考工程一致，默认）
+     0 = 包内是度
+   若上电后发现云台转角差 57.3 倍，把这个开关翻一下即可，不用改别的代码。 */
+#define VISION_ANGLE_UNIT_RAD    (1)
+
+#if VISION_ANGLE_UNIT_RAD
+#define VISION_DEG2PKG           (0.0174532925f)   /* 度   -> 包内(弧度) */
+#define VISION_PKG2DEG           (57.29578f)       /* 包内(弧度) -> 度  */
+#else
+#define VISION_DEG2PKG           (1.0f)
+#define VISION_PKG2DEG           (1.0f)
+#endif
 #define VISION_OFFLINE_MS        (50U)   /* 连续多少 ms 没收到有效帧 = 视觉离线 */
 #define VISION_RX_PACKET_SIZE    (29U)   /* 视觉 -> 电控 帧长 */
 #define VISION_TX_PACKET_SIZE    (43U)   /* 电控 -> 视觉 帧长 */

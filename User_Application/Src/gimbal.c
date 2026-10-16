@@ -345,8 +345,11 @@ static void Gimbal_Update(void* arg) {
     Vision_Set_Tx_Attitude(&user_vision,
                            user_attitude.qe_q[0], user_attitude.qe_q[1],
                            user_attitude.qe_q[2], user_attitude.qe_q[3],
-                           gimbal->imu_yaw, user_attitude.yaw_rate,
-                           tx_pitch, gimbal->pitch_speed * 6.0f);
+                           /* ★ 按包内单位换算（VISION_ANGLE_UNIT_RAD=1 时 -> 弧度/弧度每秒，与参考工程一致）*/
+                           gimbal->imu_yaw * VISION_DEG2PKG,
+                           user_attitude.yaw_rate * VISION_DEG2PKG,
+                           tx_pitch * VISION_DEG2PKG,
+                           gimbal->pitch_speed * 6.0f * VISION_DEG2PKG);
     /* ★ 弹速：按参考工程的算法用【摩擦轮转速】换算（rad/s × 系数），
        不再用 ballistics.v0 那个占位值（它恒为 5.0，会让视觉算错弹道）。
        bullet_count 仍为 0：真实弹量要接裁判系统，本车没接。 */
