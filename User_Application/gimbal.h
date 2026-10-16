@@ -51,6 +51,12 @@
    ★ 它是【前馈】、不在反馈回路里，所以改它【不影响稳定性】—— 这正是它比加 kp 安全的原因。
    在线调 gimbal_kf，建议范围 1.0 ~ 1.3。 */
 #define GIMBAL_YAW_KF           (1.30f)
+/* ---- 自瞄（视觉）接管配置 ---- */
+#define GIMBAL_YAW_AUTO_DEF     (0.0f)     /* 0=摇杆 1=视觉接管（在线调 yaw_auto）*/
+#define GIMBAL_CAM_YAW_OFF      (0.0f)     /* 相机光轴与枪管的水平零位偏置 deg */
+#define GIMBAL_AIM_FF_GAIN      (1.0f)     /* 视觉角速度前馈增益：1.0=直接用视觉给的角速度 */
+#define GIMBAL_AIM_DELAY_MS     (20.0f)    /* 链路延迟估计 ms，需实测（先给 20）*/
+#define GIMBAL_AIM_TIMEOUT_MS   (120.0f)   /* 丢帧超时 ms */
 
 /* ★★★ 陀螺零偏在线跟踪 —— 根治"摇杆不动时每 5~6 秒飘一次"-----------------
    机理：IMU 的 yaw 是【纯陀螺积分、没有绝对参考】，零偏（实测约 0.05deg/s）会让 imu_yaw
@@ -236,6 +242,18 @@ typedef struct {
     float bias_k;                  /* 零偏跟踪系数，可在线改（0=关闭）*/
     float enc_rate_lpf;            /* 编码器角速度低通状态 deg/s */
     float enc_last;                /* 上一拍编码器角度 deg */
+    /* ---- 自瞄（视觉）接管 ---- */
+    float    yaw_auto;        /* ≠0 = 目标角由视觉给，摇杆不参与。在线调 yaw_auto */
+    float    yaw_auto_pre;    /* 上一拍标志，用于检测"接管瞬间" */
+    float    yaw_target_ext;  /* 视觉给的目标角 deg */
+    float    cam_yaw_off;     /* 相机光轴 <-> 枪管零位偏置 deg（打靶标定）*/
+    float    aim_ff_gain;     /* 视觉角速度前馈增益（前馈不在回路里，改它不影响稳定性）*/
+    float    aim_delay_ms;    /* 链路延迟补偿 ms */
+    float    aim_timeout_ms;  /* 丢帧超时 ms，超时就冻结目标角 */
+    float    aim_err;         /* 观察用：视觉目标 - 实际 */
+    float    aim_ok_f;        /* 观察用镜像：1=数据有效 */
+    uint8_t  aim_valid;
+    uint32_t aim_ms;
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */
     uint16_t dbus_offline_ms;      /* 遥控断线累计 ms */
     float imu_yaw;                 /* IMU 实测的云台世界朝向 deg（观察用）*/

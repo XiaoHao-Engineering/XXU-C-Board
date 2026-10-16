@@ -38,6 +38,17 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->bias_k = GIMBAL_BIAS_TRACK_ALPHA;
     gimbal->enc_rate_lpf = 0.0f;
     gimbal->enc_last = 0.0f;
+    gimbal->yaw_auto = GIMBAL_YAW_AUTO_DEF;
+    gimbal->yaw_auto_pre = 0.0f;
+    gimbal->yaw_target_ext = 0.0f;
+    gimbal->cam_yaw_off = GIMBAL_CAM_YAW_OFF;
+    gimbal->aim_ff_gain = GIMBAL_AIM_FF_GAIN;
+    gimbal->aim_delay_ms = GIMBAL_AIM_DELAY_MS;
+    gimbal->aim_timeout_ms = GIMBAL_AIM_TIMEOUT_MS;
+    gimbal->aim_err = 0.0f;
+    gimbal->aim_ok_f = 0.0f;
+    gimbal->aim_valid = 0;
+    gimbal->aim_ms = 0;
     gimbal->target_rate = 0.0f;
     gimbal->last_dbus_count = 0;
     gimbal->dbus_offline_ms = 0;
@@ -248,6 +259,39 @@ static void Gimbal_Update(void* arg) {
        位置环只能事后去追 -> "冲出去再回来"。限斜率让前馈慢慢减下来，云台跟着平滑减速。
        积分用的也是限斜率之后的 target_rate，所以目标角不会跳。 */
     const float rate_cmd = stick * gimbal->max_w * RAD_TO_DEG * GIMBAL_YAW_DIR;
+    if (gimbal->yaw_auto > 0.5f) {
+        /* ★★★ 自瞄接管：目标角来自视觉，摇杆不参与。
+           四条缺一不可：无扰动接管 / 丢帧冻结 / 延迟补偿 / 角速度前馈。 */
+        /* ① 接管瞬间：目标角从【当前角度】起，否则云台猛甩一下（撞软限位、丢目标）*/
+        if (gimbal->yaw_auto_pre < 0.5f) {
+            gimbal->yaw_target_ext = gimbal->imu_yaw;
+            gimbal->aim_ms = HAL_GetTick();
+            gimbal->aim_valid = 0;
+        }
+        /* ② 在线判定 + 丢帧冻结：超时就【冻结】目标角，
+              既不继续外推（会越推越偏），也不回中（会让操作手措手不及）*/
+        if (Vision_Is_Online(&user_vision) != 0) {
+            gimbal->aim_ms = HAL_GetTick();
+            gimbal->aim_valid = 1;
+        } else if ((HAL_GetTick() - gimbal->aim_ms) > (uint32_t)gimbal->aim_timeout_ms) {
+            gimbal->aim_valid = 0;
+        }
+        if (gimbal->aim_valid != 0) {
+            gimbal->yaw_target_ext =
+                Gimbal_Wrap180(user_vision.target_yaw + gimbal->cam_yaw_off);
+            /* ③ 前馈：视觉给的【目标角速度】直接当目标速率（复用已有的前馈通路）*/
+            gimbal->target_rate = user_vision.target_yaw_vel * gimbal->aim_ff_gain;
+        } else {
+            gimbal->target_rate = 0.0f;
+        }
+        /* ④ 延迟补偿：视觉看到的是【过去】，用云台角速度外推到"现在"。
+              age 用 aim_delay_ms 估计（需实测）；姿态漂移在几十毫秒内可忽略 */
+        gimbal->target_yaw = Gimbal_Wrap180(gimbal->yaw_target_ext
+                             + gimbal->yaw_rate_lpf * 6.0f
+                               * (gimbal->aim_delay_ms * 0.001f));
+        gimbal->aim_err = Gimbal_Wrap180(gimbal->yaw_target_ext - gimbal->imu_yaw);
+        gimbal->aim_ok_f = (float)gimbal->aim_valid;
+    } else {
     const float rate_step = gimbal->rate_slew * GIMBAL_DT_S;
     if (rate_cmd > gimbal->target_rate + rate_step) {
         gimbal->target_rate += rate_step;
@@ -259,6 +303,8 @@ static void Gimbal_Update(void* arg) {
 
     gimbal->target_yaw += gimbal->target_rate * GIMBAL_DT_S;
     gimbal->target_yaw = Gimbal_Wrap180(gimbal->target_yaw);
+    }
+    gimbal->yaw_auto_pre = gimbal->yaw_auto;
 #else
     /* 纯速度控制：推着匀速转、松杆主动刹车停在当前位置 */
     gimbal->target_speed = stick * gimbal->max_w * RAD_S_TO_RPM * GIMBAL_YAW_DIR;
@@ -283,6 +329,18 @@ static void Gimbal_Update(void* arg) {
     }
 
     gimbal->yaw = Gimbal_Get_Yaw(gimbal);
+#if GIMBAL_LOCK_WORLD
+    /* 回传给视觉：四元数(EKF) + 当前角度/角速度 + 弹速。
+       视觉需要这些才能把"像素偏差"换成"目标角度"，并做完整三维变换 */
+    Vision_Set_Tx_Mode(&user_vision,
+                       (gimbal->yaw_auto > 0.5f) ? VISION_TX_MODE_AUTOAIM : VISION_TX_MODE_IDLE);
+    Vision_Set_Tx_Attitude(&user_vision,
+                           user_attitude.qe_q[0], user_attitude.qe_q[1],
+                           user_attitude.qe_q[2], user_attitude.qe_q[3],
+                           gimbal->imu_yaw, user_attitude.yaw_rate,
+                           gimbal->pitch, gimbal->pitch_speed);
+    Vision_Set_Tx_Bullet(&user_vision, user_shooter.ballistics.v0, 0U);
+#endif
 
 #if GIMBAL_LOCK_WORLD && GIMBAL_IMU_ON_GIMBAL
     /* ★★ 陀螺零偏在线跟踪（根治"摇杆不动时每 5~6 秒飘一次"，原理见 gimbal.h）：

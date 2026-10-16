@@ -67,6 +67,7 @@ void Vision_Init(VISION_DRIVES* vision, UART_DRIVES* uart) {
     vision->frame_count = 0U;
     vision->crc_error_count = 0U;
     vision->timeout_count = 0U;
+    vision->frame_count_f = 0.0f;
 
     /* 挂到通用串口层：收够一段就回调 Vision_Handle（和 CAN 层同一个套路）*/
     UART_RegisterCallback(uart, Vision_Handle);
@@ -135,6 +136,7 @@ static void Vision_Update(void* arg) {
         && (HAL_GetTick() - vision->last_rx_ms) > VISION_OFFLINE_MS) {
         vision->is_online = 0;
         vision->timeout_count++;
+        vision->frame_count_f = (float)vision->frame_count;
     }
 
     /* 组包并发出：CRC 覆盖除最后 2 字节以外的全部内容 */

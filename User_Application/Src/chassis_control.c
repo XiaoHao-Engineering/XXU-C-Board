@@ -200,6 +200,15 @@ static void Chassis_Apply_Plot_Mode(void) {
                                 &user_can_1.rx_count_f, &user_can_2.rx_count_f);
             break;
 
+        case 5:
+            /* 自瞄调试（6 通道）：vtgt 视觉目标角 | vyaw 实际世界角 | verr 误差 |
+               vdelay 延迟补偿 ms | vok 数据是否有效 | vfps 视觉帧数（看帧率）*/
+            Serialplot_Set_Data(&user_serialplot, 6,
+                                &user_gimbal.yaw_target_ext, &user_gimbal.imu_yaw,
+                                &user_gimbal.aim_err, &user_gimbal.aim_delay_ms,
+                                &user_gimbal.aim_ok_f, &user_vision.frame_count_f);
+            break;
+
         case 2:
             /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
                gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */

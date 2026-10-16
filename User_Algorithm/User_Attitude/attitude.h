@@ -37,6 +37,8 @@ typedef struct {
 
     float pitch, yaw;               /* 输出姿态角 deg */
     float yaw_rate;                 /* 世界系 yaw 角速度 deg/s（已按俯仰投影补偿），给云台做阻尼 */
+    float qe_roll, qe_pitch, qe_yaw;   /* 四元数 EKF 解算的欧拉角 deg（与互补滤波并行对比）*/
+    float qe_q[4];                     /* 四元数 EKF 的 q = w,x,y,z（回传给视觉用）*/
     float yaw_offset;               /* 偏航零位偏移 */
     uint32_t update_cnt;            /* 更新次数 */
 } ATTITUDE_DRIVES;

@@ -99,6 +99,7 @@ typedef struct {
     uint32_t frame_count;          /* 累计有效帧数（看帧率用）*/
     uint32_t crc_error_count;      /* CRC 错帧数（链路质量）*/
     uint32_t timeout_count;        /* 离线次数（掉线统计）*/
+    float    frame_count_f;        /* frame_count 的 float 镜像（进绘图通道用）*/
 
     SysTick_Task task;             /* 1kHz：发包 + 离线判定 */
 } VISION_DRIVES;
