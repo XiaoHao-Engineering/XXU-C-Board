@@ -195,8 +195,8 @@ int main(void)
   /* 板载 IMU：SPI1 + 姿态解算（BMI088 双片选：加速度 PA4 / 陀螺 PB0） */
   SPI_Init(&user_spi_accel, &hspi1, IMU_CS_ACCEL_GPIO_Port, IMU_CS_ACCEL_Pin);
   SPI_Init(&user_spi_gyro, &hspi1, IMU_CS_GYRO_GPIO_Port, IMU_CS_GYRO_Pin);
-  BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 1);
-  Attitude_Init(&user_attitude, &user_bmi088, 0.001f);
+  BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 2);   /* ★ 2ms=500Hz：把 IMU读取+EKF 的中断负载减半，先把系统从"几秒后锁死"里救出来 */
+  Attitude_Init(&user_attitude, &user_bmi088, 0.002f);              /* ★ 必须与上面的 2ms 一致，否则 EKF 的 dt 错 */
     BOOT_TRACE("M2 IMU + attitude OK");
 
   UART_Init(&user_serialplot_uart, &huart6);
