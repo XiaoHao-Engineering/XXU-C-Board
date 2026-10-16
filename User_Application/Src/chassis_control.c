@@ -294,6 +294,32 @@ static void Chassis_Apply_Plot_Mode(void) {
                                 &user_vision.frame_count_f, &user_vision.crc_error_f);
             break;
 
+        case 10:
+            /* ★★ 自瞄【跟随效果】视图（4 通道 / Frame Size 16）—— 专看"视觉给的目标值"和
+               "云台实际角"拟合/跟随得怎么样。两个轴各一对（目标 + 实际）：
+                 vis_yaw    视觉给的目标 yaw 角（= target_yaw_deg，已是【度】）        度
+                 my_yaw     云台【实际】世界 yaw 角（imu_yaw）                        度
+                 tgt_pitch  pitch 控制环的【内部目标关节角】（target_pitch）          度
+                 my_pitch   云台【实际】pitch 关节角（pitch）                        度
+               ★ SerialPlot 里要设：Frame Start AB / #Channels 4 / Frame Size 16
+               ★ 判据（"跟随"看的是两条的重合度，不是单条曲线好不好看）：
+                 vis_yaw 与 my_yaw 应【贴着走】：my_yaw 略滞后是正常的（控制延迟），
+                   但稳态误差应接近 0；只朝一个方向差一截 = 有静差（前馈/积分不够）；
+                   两条【反号】= 电控内部 yaw 方向反了（配合 tools/vision_echo_test.py
+                   的回环实验一起定位：那个实验把"姿态角"原样当"目标角"发回来，
+                   绘图上两者反号就说明是电控内部反向）。
+                 tgt_pitch 与 my_pitch 同理。
+               ★★ 为什么 pitch 这一对用【内部目标关节角】而不是直接画"视觉给的 pitch"：
+                 视觉发来的 pitch 与内部 pitch 关节角的【坐标系/零点不同】，直接比会差一个
+                 常量甚至符号，看上去"永远不重合"；target_pitch 是视觉目标 + 拨轮偏置 +
+                 延迟外推之后真正写进 pitch 控制环的最终目标角，和实际 pitch 在同一坐标系里，
+                 所以只有这一对才准确反映跟随效果。（要看"视觉原样发过来什么"用模式 9 的 vpit。）
+               ★ 本模式只登记画图通道，不改变任何控制量。*/
+            Serialplot_Set_Data(&user_serialplot, 4,
+                                &user_vision.target_yaw_deg, &user_gimbal.imu_yaw,
+                                &user_gimbal.target_pitch, &user_gimbal.pitch);
+            break;
+
         case 2:
             /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
                gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */
@@ -486,9 +512,10 @@ void ChassisControl_JScopeCallback(void* arg) {
 static const SERIALPLOT_VAR chassis_tunable[] = {
     /* 串口绘图通道在线切换（发 plot_mode=N#）：0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch)
        3=云台pitch(6ch) 4=射击机构(8ch) 5=自瞄(6ch) 6=四元数(8ch) 7=视觉发送包镜像(10ch)
-       8=自瞄接管(8ch) 9=视觉接收包镜像(8ch/Frame Size 32)。⚠️ 上位机通道数也要跟着改
-       （serialplot.py COM4 N）*/
-    {"plot_mode",  &s_plot_mode,   0.0f,   9.0f,  Chassis_Apply_Plot_Mode},
+       8=自瞄接管(8ch) 9=视觉接收包镜像(8ch/Frame Size 32)
+       10=自瞄跟随(4ch/Frame Size 16：vis_yaw/my_yaw/tgt_pitch/my_pitch)。
+       ⚠️ 上位机通道数也要跟着改（serialplot.py COM4 N）*/
+    {"plot_mode",  &s_plot_mode,   0.0f,  10.0f,  Chassis_Apply_Plot_Mode},
     {"test_wheel", &s_test_wheel, -4.0f, 4.0f,   NULL},
     {"test_rpm",   &s_test_rpm,    0.0f, 3000.0f, NULL},
     /* ⚠️ 上限必须是 CHASSIS_MAX_W：Chassis_Set_Velocity 里有幅值钳位，

@@ -4,7 +4,7 @@
 用法:
     python tools/serialplot.py                    # 自动列出串口（默认模式 2）
     python tools/serialplot.py COM4               # 直接指定串口
-    python tools/serialplot.py COM4 4             # 指定串口和【绘图模式】0~9
+    python tools/serialplot.py COM4 4             # 指定串口和【绘图模式】0~10
     python tools/serialplot.py COM4 4 921600      # 再指定波特率
     python tools/serialplot.py COM4 4 115200 1    # 再强制"带 1 字节校验和"
 
@@ -26,6 +26,12 @@
     8 = 自瞄接管    ptgt_e / pitch / ptgt / perr / pff / take / ok / auto (8 通道)
     9 = ★视觉接收包镜像 mode / vtgt / vpit / vvyaw / vpitch / vok / vfps / vcrc (8 通道)
         ★ 模式 9 用 SerialPlot（hyOzd）时填：Frame Start AB / #Channels 8 / Frame Size 32
+    10 = ★自瞄跟随   vis_yaw / my_yaw / tgt_pitch / my_pitch          (4 通道)
+        ★ 模式 10 用 SerialPlot（hyOzd）时填：Frame Start AB / #Channels 4 / Frame Size 16
+        ★ 判据：vis_yaw 与 my_yaw 应贴着走（my_yaw 略滞后正常，稳态误差应≈0）；
+          持续差一截 = 有静差，反号 = 电控内部方向反了。tgt_pitch / my_pitch 同理。
+        ★ pitch 那一对是"内部目标关节角 vs 实际关节角"——视觉发来的 pitch 与内部 pitch
+          关节角坐标系不同，直接比不准；要看"视觉原样发了什么"用模式 9 的 vpit。
 
     ★ 换模式只要改这个命令行参数（或在线发 plot_mode=N#），
       不需要改脚本里的 NAMES、也不需要重新编译固件。
@@ -124,6 +130,20 @@ MODE_NAMES = {
     #   ★ vok=1 且 vfps 稳定增长 = 链路正常；转动时 vtgt/vpit 跟着动 = 视觉在跟踪；
     #     vfps 不涨而 vcrc 涨 = 波特率/线材/共地有问题
     9: ["mode", "vtgt", "vpit", "vvyaw", "vpitch", "vok", "vfps", "vcrc"],
+    # 10 = ★ 自瞄【跟随效果】视图（4 通道 / Frame Size 16）
+    #     vis_yaw   视觉给的目标 yaw 角（包内弧度 -> 度）          度
+    #     my_yaw    云台【实际】世界 yaw（imu_yaw）                度
+    #     tgt_pitch pitch 控制环的【内部目标关节角】（target_pitch）度
+    #     my_pitch  云台【实际】pitch 关节角（pitch）              度
+    #   ★ 判据（看的是两条的重合度）：vis_yaw 与 my_yaw 应贴着走，my_yaw 略滞后是正常的
+    #     （控制延迟），但稳态误差应≈0；只朝一个方向差一截 = 静差（前馈/积分不够）；
+    #     两条【反号】= 电控内部 yaw 方向反了（可用 tools/vision_echo_test.py 回环实验定位）。
+    #   ★★ pitch 这一对用的是【内部目标关节角 vs 实际关节角】：视觉发来的 pitch 与内部
+    #     pitch 关节角坐标系/零点不同，直接比会差一个常量甚至符号（看着永远不重合）；
+    #     target_pitch 是"视觉目标 + 拨轮偏置 + 延迟外推"后真正进 pitch 环的目标，
+    #     与实际 pitch 同坐标系，所以只有这一对才准确反映跟随。
+    #   ★ SerialPlot（hyOzd）里填：Frame Start AB / #Channels 4 / Frame Size 16
+    10: ["vis_yaw", "my_yaw", "tgt_pitch", "my_pitch"],
 }
 
 DEFAULT_MODE = 2        # 和固件 chassis_config.h 的 CHASSIS_SERIALPLOT_MODE 一致
@@ -333,13 +353,13 @@ class App:
 def main():
     global NAMES
 
-    # 第 2 个参数是【绘图模式】0~9（不是裸通道数），通道名与通道数都由它定，
+    # 第 2 个参数是【绘图模式】0~10（不是裸通道数），通道名与通道数都由它定，
     # 这样就不会出现"通道数比 NAMES 多 -> 画标签时 IndexError"的问题。
     if len(sys.argv) > 2:
         try:
             mode = int(sys.argv[2])
         except ValueError:
-            print("第 2 个参数应该是绘图模式 0~9，收到 %r" % sys.argv[2])
+            print("第 2 个参数应该是绘图模式 0~10，收到 %r" % sys.argv[2])
             sys.exit(1)
         if mode not in MODE_NAMES:
             print("模式 %d 不存在。可选: %s" % (mode, sorted(MODE_NAMES)))

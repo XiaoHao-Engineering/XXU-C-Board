@@ -350,7 +350,11 @@ static void Gimbal_Update(void* arg) {
     /* ★ pitch 字段：见 user_vision.h 里 VISION_PITCH_USE_IMU_ONLY 的说明。
        本车 IMU 在 yaw 框架上 -> 枪口世界仰角 = IMU俯仰 + 编码器俯仰 */
 #if VISION_PITCH_USE_IMU_ONLY
-    const float tx_pitch = user_attitude.qe_pitch;
+    /* ★ 与参考工程一致：参考的 Gimbal.IMU_Gimbal.Get_Angle_Pitch() 返回 Data_Euler.pitch,
+       而 dvc_bmi088.cpp:524-527 写明"QEKF_INS.Roll 实际是绕 Y 轴的俯仰角"
+       -> Data_Euler.pitch = QEKF_INS.Roll。所以发给视觉的 pitch 要用 qe_roll 而不是 qe_pitch。
+       实测两个独立样本都验证了这一点：包内 pitch ≈ 四元数解出的 roll。 */
+    const float tx_pitch = user_attitude.qe_roll;
 #else
     const float tx_pitch = user_attitude.qe_pitch + gimbal->pitch;
 #endif
