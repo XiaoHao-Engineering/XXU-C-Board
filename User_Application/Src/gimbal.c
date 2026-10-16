@@ -278,9 +278,9 @@ static void Gimbal_Update(void* arg) {
         }
         if (gimbal->aim_valid != 0) {
             gimbal->yaw_target_ext =
-                Gimbal_Wrap180(user_vision.target_yaw + gimbal->cam_yaw_off);
+                Gimbal_Wrap180(user_vision.target_yaw * VISION_PKG2DEG + gimbal->cam_yaw_off);
             /* ③ 前馈：视觉给的【目标角速度】直接当目标速率（复用已有的前馈通路）*/
-            gimbal->target_rate = user_vision.target_yaw_vel * gimbal->aim_ff_gain;
+            gimbal->target_rate = user_vision.target_yaw_vel * VISION_PKG2DEG * gimbal->aim_ff_gain;
         } else {
             gimbal->target_rate = 0.0f;
         }
