@@ -43,6 +43,22 @@
    10ms(100Hz) = 4.3kB/s，占带宽约 37%，够用且稳妥。 */
 #define VISION_TX_PERIOD_MS      (10U)    /* 发包周期 ms：1kHz=43kB/s 超出 115200 能力，故 100Hz */
 
+/* ★ 发送包 pitch 字段的语义（协议不变，只是填什么）：
+   0 = 发 "yaw框架倾角(IMU/AHRS) + 枪管相对yaw框架角(编码器)" 的合成 = 枪口世界仰角
+       —— 本车 IMU 装在 yaw/pitch 连接处（yaw 框架），看不到枪管自己的俯仰，必须相加
+   1 = 只发 IMU/AHRS 的 pitch —— 参考工程的填法，适用于 IMU 直接装在 pitch 框架上的情况
+   ★ 判定方法：只转 pitch（枪管）时看绘图模式 6 的 qpitch 变不变
+       变 -> IMU 在 pitch 框架上 -> 填 1
+       不变 -> IMU 在 yaw 框架上   -> 填 0（本车默认） */
+#define VISION_PITCH_USE_IMU_ONLY   (0)
+
+/* ★ 弹速换算系数：弹速[m/s] = 摩擦轮角速度[rad/s] × 本系数
+   （参考工程用的就是 0.03。★ 必须实测标定：换个摩擦轮/电压就得重标）*/
+#define VISION_BULLET_SPEED_COEF    (0.03f)
+
+/* 摩擦轮 RPM -> rad/s 的换算（RPM × 2π/60）*/
+#define VISION_RPM_TO_RAD_S         (0.10471976f)
+
 /* 电控 -> 视觉 的工作模式 */
 #define VISION_TX_MODE_IDLE       (0)    /* 不参与 */
 #define VISION_TX_MODE_AUTOAIM    (1)    /* 自瞄 */

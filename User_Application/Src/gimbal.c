@@ -332,6 +332,14 @@ static void Gimbal_Update(void* arg) {
 #if GIMBAL_LOCK_WORLD
     /* 回传给视觉：四元数(EKF) + 当前角度/角速度 + 弹速。
        视觉需要这些才能把"像素偏差"换成"目标角度"，并做完整三维变换 */
+    /* ★ pitch 字段：见 user_vision.h 里 VISION_PITCH_USE_IMU_ONLY 的说明。
+       本车 IMU 在 yaw 框架上 -> 枪口世界仰角 = IMU俯仰 + 编码器俯仰 */
+#if VISION_PITCH_USE_IMU_ONLY
+    const float tx_pitch = user_attitude.qe_pitch;
+#else
+    const float tx_pitch = user_attitude.qe_pitch + gimbal->pitch;
+#endif
+
     Vision_Set_Tx_Mode(&user_vision,
                        (gimbal->yaw_auto > 0.5f) ? VISION_TX_MODE_AUTOAIM : VISION_TX_MODE_IDLE);
     Vision_Set_Tx_Attitude(&user_vision,
