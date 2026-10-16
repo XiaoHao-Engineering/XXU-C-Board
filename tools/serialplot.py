@@ -94,6 +94,11 @@ MODE_NAMES = {
     #     cf_pitch     <- 互补滤波 pitch deg（对比）
     #   ★ 静止 qw≈1、其余≈0；qw²+qx²+qy²+qz² 应恒为 1
     6: ["qw", "qx", "qy", "qz", "qroll", "qpitch", "qyaw", "cf_pitch"],
+    # 7 = 视觉发送包镜像（绘图显示的就是 tx_packet 实际内容）
+    #     tx_qw..tx_qz 四元数 | tx_yaw/yawv | tx_pitch/pitchv | tx_bspd 弹速 | tx_frames 已发送帧数
+    #   ★ tx_frames 持续增长 + 转动云台时 tx_qx/qy/qz 跟着变 = 发送链路正常
+    7: ["tx_qw", "tx_qx", "tx_qy", "tx_qz", "tx_yaw", "tx_yawv",
+        "tx_pitch", "tx_pitchv", "tx_bspd", "tx_frames"],
 }
 
 DEFAULT_MODE = 2        # 和固件 chassis_config.h 的 CHASSIS_SERIALPLOT_MODE 一致

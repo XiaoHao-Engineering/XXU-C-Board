@@ -123,6 +123,8 @@ typedef struct {
     uint32_t crc_error_count;      /* CRC 错帧数（链路质量）*/
     uint32_t timeout_count;        /* 离线次数（掉线统计）*/
     float    frame_count_f;        /* frame_count 的 float 镜像（进绘图通道用）*/
+    uint32_t tx_count;              /* ★ 已【发送】的帧数：绘图上看到它在涨 = 真的在往 UART1 发 */
+    float    tx_count_f;            /* tx_count 的 float 镜像（进绘图通道用）*/
 
     SysTick_Task task;             /* 1kHz：发包 + 离线判定 */
 } VISION_DRIVES;

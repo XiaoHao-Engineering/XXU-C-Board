@@ -235,6 +235,23 @@ static void Chassis_Apply_Plot_Mode(void) {
                                 &user_attitude.qe_roll, &user_attitude.qe_pitch,
                                 &user_attitude.qe_yaw, &user_attitude.pitch);
             break;
+        case 7:
+            /* ★ 视觉发送包【镜像】（10 通道）：绘图上显示的就是 tx_packet 里真正要发出去的字节内容。
+               所以"这里在变 + tx_frames 在涨" = 电控确实把四元数和欧拉角发给了视觉。
+               tx_qw tx_qx tx_qy tx_qz  <- packet.q[0..3]，四元数 w,x,y,z
+               tx_yaw  tx_yawv          <- packet.yaw / yaw_vel (deg, deg/s)
+               tx_pitch tx_pitchv       <- packet.pitch / pitch_vel (deg, deg/s)
+               tx_bspd                  <- packet.bullet_speed (m/s)
+               tx_frames                <- 已发送帧数，应持续增长（100/秒）
+               ★ 判据：tx_frames 在涨 + 转动云台时 tx_qx/qy/qz 跟着变 -> 发送链路完全正常 */
+            Serialplot_Set_Data(&user_serialplot, 10,
+                                &user_vision.tx_packet.q[0], &user_vision.tx_packet.q[1],
+                                &user_vision.tx_packet.q[2], &user_vision.tx_packet.q[3],
+                                &user_vision.tx_packet.yaw, &user_vision.tx_packet.yaw_vel,
+                                &user_vision.tx_packet.pitch, &user_vision.tx_packet.pitch_vel,
+                                &user_vision.tx_packet.bullet_speed, &user_vision.tx_count_f);
+            break;
+
         case 2:
             /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
                gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */

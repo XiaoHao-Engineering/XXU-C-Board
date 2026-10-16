@@ -143,6 +143,8 @@ static void Vision_Update(void* arg) {
     vision->tx_packet.crc16 = Vision_CRC16((const uint8_t*)&vision->tx_packet,
                                            VISION_TX_PACKET_SIZE - 2U);
     UART_Send_Data(vision->uart, (const char*)&vision->tx_packet, VISION_TX_PACKET_SIZE);
+    vision->tx_count++;
+    vision->tx_count_f = (float)vision->tx_count;
 }
 
 /* 应用层接口 -------------------------------------------------------------*/
