@@ -112,7 +112,7 @@ list(APPEND SOURCES ${DRIVER_SOURCES} ${CMSIS_DSP_SRC})
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F407xx_FLASH.ld)
 
 add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map)
-add_link_options(-mcpu=cortex-m4 -mthumb)
+add_link_options(-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 add_link_options(-T ${LINKER_SCRIPT})
 
 add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})
