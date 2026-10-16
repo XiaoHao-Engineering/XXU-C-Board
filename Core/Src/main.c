@@ -167,7 +167,7 @@ int main(void)
   BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 1);
   Attitude_Init(&user_attitude, &user_bmi088, 0.001f);
 
-  UART_Init(&user_serialplot_uart, &huart1);
+  UART_Init(&user_serialplot_uart, &huart6);
 
   /* ---- 串口自检探针 ----------------------------
      阻塞发送，绕过 TX 队列和 DMA，用来定位故障：
@@ -184,8 +184,21 @@ int main(void)
                   CHASSIS_SERIALPLOT_PERIOD_MS);
 
     /* 视觉链路（与算法组的自瞄对接）：UART1 */
-    UART_Init(&user_vision_uart, &huart6);
+    UART_Init(&user_vision_uart, &huart1);
     Vision_Init(&user_vision, &user_vision_uart);
+
+    /* ★★ 开机把标识发到三个串口。
+       之后用【普通串口助手】逐个物理口连一遍，看到哪行字就知道那个口是哪个 USART，
+       再也不用猜接线（本次反复出错就是因为猜接线）。
+       确认完这段可以整段删掉，不影响功能。 */
+    {
+        static const char id_uart1[] = "\r\n=== this port is USART1 ===\r\n";
+        static const char id_uart3[] = "\r\n=== this port is USART3 ===\r\n";
+        static const char id_uart6[] = "\r\n=== this port is USART6 ===\r\n";
+        HAL_UART_Transmit(&huart1, (uint8_t*)id_uart1, sizeof(id_uart1) - 1, 100);
+        HAL_UART_Transmit(&huart3, (uint8_t*)id_uart3, sizeof(id_uart3) - 1, 100);
+        HAL_UART_Transmit(&huart6, (uint8_t*)id_uart6, sizeof(id_uart6) - 1, 100);
+    }
   /* 绘图通道在 Chassis_Apply_Plot_Mode() 里按 CHASSIS_SERIALPLOT_MODE 登记，可在线切 */
 
   /* 云台 yaw：GM6020，绝对编码器提供云台相对底盘的角度 */
