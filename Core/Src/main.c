@@ -119,7 +119,7 @@ int main(void)
   TIMER_Init(&user_timer_10, &htim10, TIM10_CLK);
   TIMER_RegisterCallback(&user_timer_10, ChassisControl_JScopeCallback);
 
-  UART_Init(&user_imu_uart, &huart6);
+  UART_Init(&user_imu_uart, &huart3);
 
   /* 状态灯：C 板是 RGB 三色灯，红 = PH12，绿 = PH11，低电平点亮 */
   LED_Init(&user_red_led, LED_RED_GPIO_Port, LED_RED_Pin, 1);
@@ -167,7 +167,7 @@ int main(void)
   BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 1);
   Attitude_Init(&user_attitude, &user_bmi088, 0.001f);
 
-  UART_Init(&user_serialplot_uart, &huart1);
+  UART_Init(&user_serialplot_uart, &huart6);
 
   /* ---- 串口自检探针 ----------------------------
      阻塞发送，绕过 TX 队列和 DMA，用来定位故障：
@@ -182,6 +182,10 @@ int main(void)
   Serialplot_Init(&user_serialplot, &user_serialplot_uart,
                   ChassisControl_Get_Tunable(&tunable_num), tunable_num,
                   CHASSIS_SERIALPLOT_PERIOD_MS);
+
+    /* 视觉链路（与算法组的自瞄对接）：UART1 */
+    UART_Init(&user_vision_uart, &huart1);
+    Vision_Init(&user_vision, &user_vision_uart);
   /* 绘图通道在 Chassis_Apply_Plot_Mode() 里按 CHASSIS_SERIALPLOT_MODE 登记，可在线切 */
 
   /* 云台 yaw：GM6020，绝对编码器提供云台相对底盘的角度 */

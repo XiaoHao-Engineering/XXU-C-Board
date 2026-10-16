@@ -97,7 +97,10 @@ extern SysTick_Task chassis_task;
 
 /* 串口绘图 / 在线调参 */
 #include "../../User_Drives/User_Peripheral/user_serialplot.h"
+#include "../../User_Drives/User_Peripheral/user_vision.h"
 extern UART_DRIVES       user_serialplot_uart;
+extern UART_DRIVES  user_vision_uart;
+extern VISION_DRIVES user_vision;
 extern SERIALPLOT_DRIVES user_serialplot;
 
 /* 板载 IMU 与姿态解算 */

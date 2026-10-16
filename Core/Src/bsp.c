@@ -62,6 +62,8 @@ SysTick_Task LED_Blink_Task = {0};
 
 /* 串口绘图 / 在线调参 */
 UART_DRIVES       user_serialplot_uart = {0};
+UART_DRIVES   user_vision_uart = {0};
+VISION_DRIVES user_vision = {0};
 SERIALPLOT_DRIVES user_serialplot = {0};
 
 /* 板载 IMU 与姿态解算 */

@@ -33,6 +33,7 @@
 #define TIMER_CALLBACK_NUM    (8)         /* 通用定时器回调函数数量 */
 
 #define UART_NUM              (5)         /* 开发板的 UART 总数 */
+#define VISION_NUM              (1)     /* 视觉串口对接设备数 */
 #define UART_CALLBACK_NUM     (8)         /* 最大回调函数数量 */
 
 #define CAN_NUM               (2)         /* 开发板的 CAN 总数 */
