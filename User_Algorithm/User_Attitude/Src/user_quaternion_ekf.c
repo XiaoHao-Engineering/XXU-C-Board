@@ -483,11 +483,16 @@ static void IMU_QuaternionEKF_Observe(KalmanFilter_t *kf)
  */
 static float invSqrt(float x)
 {
-    float halfx = 0.5f * x;
-    float y = x;
-    long i = *(long *)&y;
-    i = 0x5f375a86 - (i >> 1);
-    y = *(float *)&i;
+    /* ★ 修正：原实现用 *(long*)&y 做类型双关，在 -O2 下违反严格别名规则（编译警告：
+       "dereferencing type-punned pointer will break strict-aliasing rules"、
+       "'y' is used uninitialized"），GCC 有权把它优化错 -> 加速度归一化出错 -> EKF 发散。
+       参考工程用 MDK 编译不触发这个问题，所以"同一份源码换个编译器就崩"。
+       这里改用 C99 允许的 union 双关，算法与数值行为完全不变。 */
+    union { float f; int32_t i; } u;
+    const float halfx = 0.5f * x;
+    u.f = x;
+    u.i = 0x5f3759df - (u.i >> 1);
+    float y = u.f;
     y = y * (1.5f - (halfx * y * y));
     return y;
 }
