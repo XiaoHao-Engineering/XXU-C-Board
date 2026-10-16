@@ -76,12 +76,22 @@ void Vision_Init(VISION_DRIVES* vision, UART_DRIVES* uart) {
     vision->target_pitch_acc = 0.0f;
     vision->rx_mode = VISION_RX_MODE_NO_CONTROL;
 
+    /* ★ float 镜像（绘图模式 9 用）：结构体是全局变量本来就被 BSS 清零，
+       但显式初始化更稳妥（换静态/局部实例、或反复 Init 时不会留旧值）。*/
+    vision->rx_mode_f = 0.0f;
+    vision->target_yaw_deg = 0.0f;
+    vision->target_pitch_deg = 0.0f;
+    vision->target_yaw_vel_deg = 0.0f;
+    vision->target_pitch_vel_deg = 0.0f;
+    vision->online_f = 0.0f;
+    vision->frame_count_f = 0.0f;
+    vision->crc_error_f = 0.0f;
+
     vision->is_online = 0;
     vision->last_rx_ms = 0U;
     vision->frame_count = 0U;
     vision->crc_error_count = 0U;
     vision->timeout_count = 0U;
-    vision->frame_count_f = 0.0f;
 
     /* 挂到通用串口层：收够一段就回调 Vision_Handle（和 CAN 层同一个套路）*/
     UART_RegisterCallback(uart, Vision_Handle);
@@ -139,6 +149,18 @@ static void Vision_Handle(void* user_uart) {
             if (vision->is_online == 0) {
                 vision->is_online = 1;       /* 重新上线 */
             }
+
+            /* ★ float 镜像同步（串口绘图模式 9 = "画视觉发过来的数据"）：
+               放在最后，online_f 才能反映"本帧刚收到 -> 在线 = 1"。
+               角度统一 ×VISION_PKG2DEG 由【弧度】换算成【度】（包内是弧度）。*/
+            vision->rx_mode_f = (float)vision->rx_mode;
+            vision->target_yaw_deg = vision->target_yaw * VISION_PKG2DEG;
+            vision->target_pitch_deg = vision->target_pitch * VISION_PKG2DEG;
+            vision->target_yaw_vel_deg = vision->target_yaw_vel * VISION_PKG2DEG;
+            vision->target_pitch_vel_deg = vision->target_pitch_vel * VISION_PKG2DEG;
+            vision->online_f = (float)vision->is_online;
+            vision->frame_count_f = (float)vision->frame_count;
+            vision->crc_error_f = (float)vision->crc_error_count;
         }
     }
 }
@@ -153,6 +175,7 @@ static void Vision_Update(void* arg) {
         vision->is_online = 0;
         vision->timeout_count++;
         vision->frame_count_f = (float)vision->frame_count;
+        vision->online_f = (float)vision->is_online;   /* 镜像跟着掉 0，绘图才不会一直显示"在线" */
     }
 
     /* 组包并发出：CRC 覆盖除最后 2 字节以外的全部内容 */

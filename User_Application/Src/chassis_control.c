@@ -269,6 +269,31 @@ static void Chassis_Apply_Plot_Mode(void) {
                                 &user_gimbal.aim_ok_f, &user_gimbal.yaw_auto);
             break;
 
+        case 9:
+            /* ★★ 视觉【接收包】镜像（8 通道 / Frame Size 32）—— 专门用来"把视觉发过来的数据画出来"。
+               数据源：user_vision.target_* （包内是【弧度】，这里已 ×VISION_PKG2DEG 换成【度】）
+                       + 状态量的 float 镜像（Serialplot_Set_Data 只按 float 读，
+                         uint8_t/uint32_t 不能直接传地址，见 user_vision.h 的 float 镜像字段）。
+               ★ SerialPlot 里要设：Frame Start AB / #Channels 8 / Frame Size 32
+               通道含义与单位：
+                 mode    视觉给的控制模式（0=不给控制 1=只给控制 2=控制+请求开火），无量纲
+                 vtgt    目标 yaw 角，度
+                 vpit    目标 pitch 角，度
+                 vvyaw   目标 yaw 角速度（可当速度前馈），度/秒
+                 vpitch  目标 pitch 角速度（可当速度前馈），度/秒
+                 vok     视觉是否在线（1=在线 0=离线），0-1
+                 vfps    累计有效帧数（看帧率，稳定增长说明链路通），计数
+                 vcrc    累计 CRC 坏帧数（链路质量），计数
+               ★ 判据：vok=1 且 vfps 稳定增长 -> 视觉链路正常；
+                 转动/移动目标时 vtgt/vpit 跟着动 -> 视觉确实在跟踪；
+                 vfps 不涨而 vcrc 涨 -> 波特率/线材/共地有问题（坏帧被丢，云台不会乱动）。*/
+            Serialplot_Set_Data(&user_serialplot, 8,
+                                &user_vision.rx_mode_f, &user_vision.target_yaw_deg,
+                                &user_vision.target_pitch_deg, &user_vision.target_yaw_vel_deg,
+                                &user_vision.target_pitch_vel_deg, &user_vision.online_f,
+                                &user_vision.frame_count_f, &user_vision.crc_error_f);
+            break;
+
         case 2:
             /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
                gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */
@@ -460,8 +485,10 @@ void ChassisControl_JScopeCallback(void* arg) {
 
 static const SERIALPLOT_VAR chassis_tunable[] = {
     /* 串口绘图通道在线切换（发 plot_mode=N#）：0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch)
-       3=云台pitch(6ch) 4=射击机构(8ch)。⚠️ 上位机通道数也要跟着改（serialplot.py COM4 N）*/
-    {"plot_mode",  &s_plot_mode,   0.0f,   8.0f,  Chassis_Apply_Plot_Mode},
+       3=云台pitch(6ch) 4=射击机构(8ch) 5=自瞄(6ch) 6=四元数(8ch) 7=视觉发送包镜像(10ch)
+       8=自瞄接管(8ch) 9=视觉接收包镜像(8ch/Frame Size 32)。⚠️ 上位机通道数也要跟着改
+       （serialplot.py COM4 N）*/
+    {"plot_mode",  &s_plot_mode,   0.0f,   9.0f,  Chassis_Apply_Plot_Mode},
     {"test_wheel", &s_test_wheel, -4.0f, 4.0f,   NULL},
     {"test_rpm",   &s_test_rpm,    0.0f, 3000.0f, NULL},
     /* ⚠️ 上限必须是 CHASSIS_MAX_W：Chassis_Set_Velocity 里有幅值钳位，

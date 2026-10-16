@@ -4,7 +4,7 @@
 用法:
     python tools/serialplot.py                    # 自动列出串口（默认模式 2）
     python tools/serialplot.py COM4               # 直接指定串口
-    python tools/serialplot.py COM4 4             # 指定串口和【绘图模式】0~4
+    python tools/serialplot.py COM4 4             # 指定串口和【绘图模式】0~9
     python tools/serialplot.py COM4 4 921600      # 再指定波特率
     python tools/serialplot.py COM4 4 115200 1    # 再强制"带 1 字节校验和"
 
@@ -20,11 +20,17 @@
     2 = 云台 yaw    gyaw / gtgt / gimu / gcmd / gspd                (5 通道)  ← 固件默认
     3 = 云台 pitch  pitch / ptgt / pspd / 外环积分 / 内环积分 / 电流  (6 通道)
     4 = 射击机构    frpm / frpm_f / frpm_t / ferr / fcur / bpitch / bv0 / fstate (8 通道)
+    5 = 自瞄        vtgt / vyaw / verr / vdelay / vok / vfps          (6 通道)
+    6 = 四元数      qw / qx / qy / qz / qroll / qpitch / qyaw / cf_pitch (8 通道)
+    7 = 视觉发送包镜像 tx_qw..tx_qz / tx_yaw / tx_yawv / tx_pitch / tx_pitchv / tx_bspd / tx_frames (10 通道)
+    8 = 自瞄接管    ptgt_e / pitch / ptgt / perr / pff / take / ok / auto (8 通道)
+    9 = ★视觉接收包镜像 mode / vtgt / vpit / vvyaw / vpitch / vok / vfps / vcrc (8 通道)
+        ★ 模式 9 用 SerialPlot（hyOzd）时填：Frame Start AB / #Channels 8 / Frame Size 32
 
     ★ 换模式只要改这个命令行参数（或在线发 plot_mode=N#），
       不需要改脚本里的 NAMES、也不需要重新编译固件。
 
-注意（C 板）: 串口绘图走 USART1，CubeMX 里配的是 115200（和 A 板一致）。
+注意（C 板）: 串口绘图走 USART6，CubeMX 里配的是 115200（和 A 板一致）。
               要是以后把 USART6 提到 921600 提高刷新率，
               这里也要跟着改（命令行最后一个参数）。
 
@@ -47,7 +53,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # ------------------------------------------------------------------ 配置
 HEADER   = 0xAB
-BAUD     = 115200       # 和固件 USART1 的波特率一致
+BAUD     = 115200       # 和固件 USART6 的波特率一致
 MAX_PTS  = 500          # 每条曲线保留的点数
 
 # 每个绘图模式对应的通道名。
@@ -99,6 +105,25 @@ MODE_NAMES = {
     #   ★ tx_frames 持续增长 + 转动云台时 tx_qx/qy/qz 跟着变 = 发送链路正常
     7: ["tx_qw", "tx_qx", "tx_qy", "tx_qz", "tx_yaw", "tx_yawv",
         "tx_pitch", "tx_pitchv", "tx_bspd", "tx_frames"],
+    # 8 = 自瞄接管 / 数据闸门调试
+    #     ptgt_e 视觉 pitch 目标角(过闸门) | pitch 实际角 | ptgt 最终目标角(含外推)
+    #     perr pitch 误差 | pff pitch 角速度前馈 | take 本拍是否视觉接管(1/0)
+    #     ok 视觉数据是否有效(1/0) | auto 自瞄使能开关
+    8: ["ptgt_e", "pitch", "ptgt", "perr", "pff", "take", "ok", "auto"],
+    # 9 = ★ 视觉【接收包】镜像 —— 把"视觉发过来的数据"直接画出来
+    #     ⚠️ 通道数 8、数据类型 float32 -> 帧数据 8×4 = 32 字节
+    #        SerialPlot 里设：Frame Start AB / #Channels 8 / Frame Size 32
+    #     mode   视觉控制模式(0=不给控制 1=只给控制 2=控制+请求开火)，无量纲
+    #     vtgt   目标 yaw 角，度
+    #     vpit   目标 pitch 角，度
+    #     vvyaw  目标 yaw 角速度(前馈)，度/秒
+    #     vpitch 目标 pitch 角速度(前馈)，度/秒
+    #     vok    视觉是否在线(1=在线 0=离线)，0-1
+    #     vfps   累计有效帧数(看帧率)，计数
+    #     vcrc   累计 CRC 坏帧数(链路质量)，计数
+    #   ★ vok=1 且 vfps 稳定增长 = 链路正常；转动时 vtgt/vpit 跟着动 = 视觉在跟踪；
+    #     vfps 不涨而 vcrc 涨 = 波特率/线材/共地有问题
+    9: ["mode", "vtgt", "vpit", "vvyaw", "vpitch", "vok", "vfps", "vcrc"],
 }
 
 DEFAULT_MODE = 2        # 和固件 chassis_config.h 的 CHASSIS_SERIALPLOT_MODE 一致
@@ -308,13 +333,13 @@ class App:
 def main():
     global NAMES
 
-    # 第 2 个参数是【绘图模式】0~4（不是裸通道数），通道名与通道数都由它定，
+    # 第 2 个参数是【绘图模式】0~9（不是裸通道数），通道名与通道数都由它定，
     # 这样就不会出现"通道数比 NAMES 多 -> 画标签时 IndexError"的问题。
     if len(sys.argv) > 2:
         try:
             mode = int(sys.argv[2])
         except ValueError:
-            print("第 2 个参数应该是绘图模式 0~4，收到 %r" % sys.argv[2])
+            print("第 2 个参数应该是绘图模式 0~9，收到 %r" % sys.argv[2])
             sys.exit(1)
         if mode not in MODE_NAMES:
             print("模式 %d 不存在。可选: %s" % (mode, sorted(MODE_NAMES)))

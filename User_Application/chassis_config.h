@@ -87,6 +87,6 @@
 /* 串口绘图通道选择 --------------------------------------------------------*/
 /* 0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch) 3=云台pitch(6ch，顶重力看内环积分)
    4=射击机构(8ch，看 FIR 滤波效果与卡弹判据) */
-#define CHASSIS_SERIALPLOT_MODE  (6)      /* 开机默认绘图模式：6 = 四元数/姿态(8通道/Frame Size 32)。改这个就不用发 plot_mode 命令了（命令要经 UART 下行，若适配器 TX 没接就收不到）*/
+#define CHASSIS_SERIALPLOT_MODE  (9)      /* 开机默认绘图模式：9 = 视觉接收包镜像（mode/目标角/角速度/在线/帧数/CRC错），要看曲线发 plot_mode=N# 切换 */
 
 #endif /* CHASSIS_CONFIG_H */

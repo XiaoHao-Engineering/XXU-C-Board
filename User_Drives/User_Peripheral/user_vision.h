@@ -133,13 +133,26 @@ typedef struct {
     float    target_pitch_acc;
     uint8_t  rx_mode;
 
+    /* ★★ float 镜像（专供串口绘图模式 9 = "画视觉发过来的数据"）：
+       Serialplot_Set_Data 只接 const void* 并【按 float 逐 4 字节 memcpy】，
+       把 uint8_t / uint32_t 的地址直接传进去会读到相邻字段（曲线是垃圾），
+       所以绘图要用的量都在这里多留一份 float 拷贝，每成功解析一帧后同步更新。
+       角度类统一用 VISION_PKG2DEG 从【弧度】换算成【度】，方便人看图。*/
+    float    rx_mode_f;            /* rx_mode 的 float 镜像（0/1/2）*/
+    float    target_yaw_deg;       /* = target_yaw   × VISION_PKG2DEG（弧度 -> 度）*/
+    float    target_pitch_deg;     /* = target_pitch × VISION_PKG2DEG（度）*/
+    float    target_yaw_vel_deg;   /* = target_yaw_vel   × VISION_PKG2DEG（度/秒）*/
+    float    target_pitch_vel_deg; /* = target_pitch_vel × VISION_PKG2DEG（度/秒）*/
+    float    online_f;             /* is_online 的 float 镜像（1=在线 0=离线）*/
+    float    crc_error_f;          /* crc_error_count 的 float 镜像（累计 CRC 坏帧数）*/
+
     /* 状态与统计（排错用，可进串口绘图）*/
     uint8_t  is_online;            /* 1 = 在线 */
     uint32_t last_rx_ms;           /* 最近一次收到有效帧的时刻 */
     uint32_t frame_count;          /* 累计有效帧数（看帧率用）*/
     uint32_t crc_error_count;      /* CRC 错帧数（链路质量）*/
     uint32_t timeout_count;        /* 离线次数（掉线统计）*/
-    float    frame_count_f;        /* frame_count 的 float 镜像（进绘图通道用）*/
+    float    frame_count_f;        /* frame_count 的 float 镜像（进绘图通道用，模式 5/9 共用这一份）*/
     uint32_t tx_count;              /* ★ 已【发送】的帧数：绘图上看到它在涨 = 真的在往 UART1 发 */
     float    tx_count_f;            /* tx_count 的 float 镜像（进绘图通道用）*/
 
