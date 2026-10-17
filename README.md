@@ -252,42 +252,33 @@ cmake --build build --parallel
 | 上位机 → 板子 | `变量名=值#`（首尾空白会被自动忽略）|
 
 帧尾校验和由 `user_serialplot.h` 的 `SERIALPLOT_CHECKSUM_ENABLE` 控制（默认 1）。
-自带的 `tools/serialplot.py` 会自动识别带不带校验和，命令行第 2 个参数是绘图模式号。
+自带的 `tools/serialplot.py` 会自动识别带不带校验和。
 
-### 绘图模式（可在线切换）
+### 绘图模式：只有一个（固定 6 通道）
 
-上电默认由 `chassis_config.h` 的 `CHASSIS_SERIALPLOT_MODE` 决定，
-运行中用 `plot_mode=N#` 在线切换（**换模式后 SerialPlot 里的通道数要同步改并重开串口**）：
+**上电即这一套，没有模式切换、也没有 `plot_mode` 命令了**（原来的 case 0~10 已删除）。
+SerialPlot 里必须设 **Frame Start `AB` / #Channels `6` / Frame Size `24`**，
+**Frame Size 填错就是"串口有数据但在跑不起来"（0sps + Checksum failed）**。
 
-| 模式 | 通道数 | 通道 |
-|---|---|---|
-| 0 | 4 | `yaw pitch omega vx` |
-| 1 | 8 | 4 轮的目标/反馈转子转速 |
-| **2**（默认）| 5 | `gyaw gtgt gimu gcmd gspd`（云台 yaw）|
-| **3** | 6 | `pitch ptgt pspd pid_i psd_i pcur`（云台 pitch）|
-| **4** | 12 | `frpm frpm_f frpm_t ferr fcur bpitch bv0 fstate online ready can1_rx can2_rx`（射击 + CAN 排错）|
+| 通道 | 名字 | 含义 | 单位 |
+|---|---|---|---|
+| 1 | `yaw_enc_abs` | YAW 电机**单圈绝对角**（GM6020 13 位绝对编码器）| 度 0~360 |
+| 2 | `yaw_enc_rel` | YAW **相对角**（对齐后累计，`user_gimbal.yaw`）| 度 ±180 |
+| 3 | `pitch_enc_abs` | pitch 电机**单圈绝对角** | 度 0~360 |
+| 4 | `pitch_enc_rel` | pitch **相对角**（`user_gimbal.pitch`）| 度 ±180 |
+| 5 | `target_yaw` | 遥控器发的**目标 YAW** | 度 ±180 |
+| 6 | `target_pitch` | 遥控器发的**目标 PITCH** | 度 |
 
-> ★ 模式 3 里的 `psd_i` 就是**顶重力的内环积分**；模式 4 的 `fstate` 是状态机
-> （0=STOP 1=SPINUP 2=FIRE 3=REVERSE）。
->
-> ★ **模式 4 排查"电机掉线"**：`online` 是三个电机的反馈状态打包（bit0=摩擦轮左
-> bit1=摩擦轮右 bit2=拨弹轮，7=都在线），`ready` 是摩擦轮是否到转速，
-> `can1_rx` / `can2_rx` 是两条总线的**原始收帧数**（不看 ID）。
-> **判断表：**
->
-> | 现象 | 结论 |
-> |---|---|
-> | `can2_rx` 约 **+1000/s 且不涨更快** | CAN2 上**只有 pitch 在发** → 那 3 个电调根本没在发报文：查接线 / 24V 供电 / **ESC ID（左1、右2、拨弹3）** |
-> | `can2_rx` 约 **+4000/s** 但 `online`=0 | 报文在发但 ID 对不上 → **ESC ID 配错了** |
-> | `online`=7 但 `frpm`=0 | 有反馈、在发指令但电机不转 → 查电调是否处于使能状态 / 电机相线 |
-> | `fstate` 恒为 0（不随 sw2 变）| 遥控 sw2 档位没被识别（上=仅摩擦轮 / 中=无 / 下=摩擦轮+拨弹盘）|
->
-> ★ **调参表不受绘图模式影响** —— 任何模式下都能发 `pitch_spd_ki=300#` 改参数。
+> ★ 绝对角是**绝对编码器**读数：上电停在哪就读到哪，掉电不丢，**过零点会从 360 跳回 0**（不是坏数据）。
+> ★ 相对角是"上电对齐 + 累计"的角度，跨 ±180 会跳变。
+> ★ 原来那些按模块划分的调试视图（四元数 / 视觉收发包镜像 / 射击排错 …）已随多模式一起删除；
+> 要查视觉链路用 `tools/vision_rx_test.py` / `tools/vision_echo_test.py`，
+> 要查 CAN 收帧用 RTT 或临时加通道。
+> ★ **调参表不受绘图模式影响** —— 随时都能发 `pitch_spd_ki=300#` 改参数。
 
 常用调参示例：
 
 ```
-plot_mode=3#                                 切换绘图模式
 wheel_kp=15#  wheel_ki=0.15#  wheel_kd=0#    底盘轮速 PID
 rev_fl=1# rev_fr=-1#                         轮子装反了改 -1
 spin_w=4#  omega_dir=1#  dead=10#            小陀螺 / 方向 / 死区
@@ -390,8 +381,9 @@ v0_k=0.004#  v0_b=4.0#                       弹速模型（必须实测标定�
 - 从 A 板移植到 C 板；新增云台 pitch（GM6020 ID4 @CAN2，串级 + 增强 PID）、
   射击机构（2×M3508 + 1×M2006 @CAN2，状态机 + FIR）、弹道解算（牛顿迭代）
 - 电机底层加固：首帧编码器基准保护、掉线保护、按电调型号区分电流满量程、过温降额
-- 串口绘图绘图模式可运行时切换（`plot_mode`）；CMSIS-DSP 只编译 7 个文件（644→89 编译单元）；
-  栈 1KB→2KB、堆 512B→1KB；开机音乐加总时长上限
+- 串口绘图 V1 时可运行时切换模式（`plot_mode`）；**V2.3 起精简为单一固定模式（6 通道，
+  无 `plot_mode`）**，因为多模式 + 上位机通道数不同步正是"串口有数据但画不出图"的根因；
+  CMSIS-DSP 只编译 7 个文件（644→89 编译单元）；栈 1KB→2KB、堆 512B→1KB；开机音乐加总时长上限
 
 ---
 

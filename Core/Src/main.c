@@ -231,7 +231,7 @@ int main(void)
         HAL_UART_Transmit(&huart3, (uint8_t*)id_uart3, sizeof(id_uart3) - 1, 100);
         HAL_UART_Transmit(&huart6, (uint8_t*)id_uart6, sizeof(id_uart6) - 1, 100);
     }
-  /* 绘图通道在 Chassis_Apply_Plot_Mode() 里按 CHASSIS_SERIALPLOT_MODE 登记，可在线切 */
+  /* 绘图通道在 Chassis_Apply_Plot_Mode() 里登记：固定单模式 6 通道，没有模式切换 */
 
   /* 云台 yaw：GM6020，绝对编码器提供云台相对底盘的角度 */
   PID_Init(&user_gimbal_yaw_pid, GIMBAL_YAW_KP, GIMBAL_YAW_KI, GIMBAL_YAW_KD,

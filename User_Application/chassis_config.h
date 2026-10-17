@@ -85,8 +85,17 @@
 #define CHASSIS_SOURCE_LOST_STOP  (0)
 
 /* 串口绘图通道选择 --------------------------------------------------------*/
-/* 0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch) 3=云台pitch(6ch，顶重力看内环积分)
-   4=射击机构(8ch，看 FIR 滤波效果与卡弹判据) */
-#define CHASSIS_SERIALPLOT_MODE  (9)      /* 开机默认绘图模式：9 = 视觉接收包镜像（mode/目标角/角速度/在线/帧数/CRC错），要看曲线发 plot_mode=N# 切换 */
+/* ★★ 串口绘图现在【只有一个固定模式】，上电即生效，没有模式切换、没有 plot_mode 命令。
+   6 个通道（从上到下，顺序不可改）：
+     ch1  yaw_enc_abs    YAW 电机单圈绝对角     度 0~360
+     ch2  yaw_enc_rel    YAW 相对角             度 ±180
+     ch3  pitch_enc_abs  pitch 电机单圈绝对角   度 0~360
+     ch4  pitch_enc_rel  pitch 相对角           度 ±180
+     ch5  target_yaw     遥控器发的目标 YAW     度 ±180
+     ch6  target_pitch   遥控器发的目标 PITCH   度
+   SerialPlot 里必须设：Frame Start=AB / #Channels=6 / Frame Size=24（6×4）
+   另一端的开关（SERIALPLOT_CHECKSUM_ENABLE=1）决定线上帧长 26 字节。
+   通道定义在 chassis_control.c 的 Chassis_Apply_Plot_Mode()；
+   原来的 CHASSIS_SERIALPLOT_MODE 宏（多模式默认值）已随多模式一起删除。 */
 
 #endif /* CHASSIS_CONFIG_H */

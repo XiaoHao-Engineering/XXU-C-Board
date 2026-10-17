@@ -39,8 +39,45 @@ static uint8_t        s_prev_sw1 = 0;
 static Chassis_HeadingSource s_heading_src = ChassisControl_NoHeading;
 static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
 
-/* 串口绘图通道：上电 = CHASSIS_SERIALPLOT_MODE，也能在线改（发 plot_mode=3#）*/
-static float s_plot_mode = (float)CHASSIS_SERIALPLOT_MODE;
+/* ==================== 串口绘图：只有一个固定模式（6 通道）====================
+ *
+ * ★ 上电即这个模式，没有模式切换、没有 plot_mode 命令（原来的 case 0~10 已全部删除）。
+ *
+ * 通道顺序（从上到下，不能改；SerialPlot 里的通道号就是它）：
+ *   ch1  yaw_enc_abs     YAW 电机【单圈绝对角】     度  0~360   GM6020 13 位绝对编码器
+ *   ch2  yaw_enc_rel     YAW【相对角】              度  ±180    对齐后累计角 user_gimbal.yaw
+ *   ch3  pitch_enc_abs   pitch 电机【单圈绝对角】   度  0~360   GM6020 13 位绝对编码器
+ *   ch4  pitch_enc_rel   pitch【相对角】            度  ±180    user_gimbal.pitch
+ *   ch5  target_yaw      遥控器发的【目标 YAW】     度  ±180    user_gimbal.target_yaw
+ *   ch6  target_pitch    遥控器发的【目标 PITCH】   度          user_gimbal.target_pitch
+ *
+ * ★★ SerialPlot（hyOzd 那个 Qt 上位机）里必须这样设，填错就画不出来：
+ *      Frame Start = AB
+ *      #Channels   = 6
+ *      Frame Size  = 24            <-- 6 通道 × 4 字节（float32），不是 26！
+ *      Number Type = float（32 位）/ Little Endian
+ *      Checksum    = 累加和（Sum，在通道数据之后）
+ *    线上实际帧长 = 1(帧头) + 24(数据) + 1(校验和) = 26 字节。
+ *    ★ 通道数 / Frame Size 与固件不一致的典型症状：串口"有数据在跑"，
+ *      但 SerialPlot 显示 0sps + Checksum failed，曲线完全不动 —— 帧长对不上，
+ *      永远同步不到帧头（这次"跑不起来"的根因就是这个：固件原默认模式 9 是
+ *      8 通道/34 字节，上位机却按 5 通道/20 字节配的）。
+ *
+ * ★★★ 这里【只允许传 float 变量的地址】：Serialplot_Set_Data() 内部对每个指针
+ *     按 sizeof(float)=4 做 memcpy，传 uint16_t / uint8_t / int32_t 的地址会读到
+ *     相邻字段的字节 -> 解出 NaN / 1e38 -> SerialPlot 画不出线。
+ *     GM6020 的单圈绝对角原始量 rotor_angle 是 uint16_t（0~8191 计数），
+ *     所以下面用 s_yaw_encoder_abs / s_pitch_encoder_abs 两个 float 镜像。
+ *     同理，通道数必须与实参个数完全一致（6 个），否则 data_num 与指针数不符。
+ * ========================================================================== */
+
+/* 单圈绝对角用的编码器分辨率：13 位 = 一圈 8192 个计数（不是 8191）。
+   必须与 user_dji_motor.c 里的 ENCODER_CPR 一致，否则每圈多算 0.0122%。 */
+#define PLOT_ENCODER_CPR  (8192.0f)
+
+/* GM6020 / C6x0 反馈里的【单圈绝对角】float 镜像（1kHz 同步，见 ChassisControl_Update）*/
+static float s_yaw_encoder_abs   = 0.0f;
+static float s_pitch_encoder_abs = 0.0f;
 
 /* 小陀螺转向（带死区保持，避免摇杆回中时 1kHz 反复换向）+ 自转 omega 的速率限制状态 */
 static int8_t s_spin_dir = 1;
@@ -92,23 +129,15 @@ static void Chassis_Apply_Friction_Gain(void) {
     user_shooter.friction_right_pid.kd = user_shooter.friction_left_pid.kd;
 }
 
+/* ★ 这里【绝对不能】再调 Serialplot_Set_Data()：
+   原来 case 6 里塞了一段 8 通道的绘图登记（当时想借用通道号做快捷切换），
+   后果是——只要有谁把通道号设成 6 就会把已登记好的固定 6 通道覆盖成 8 通道，
+   帧长从 26 变成 34 字节，上位机立刻全部 Checksum failed。已删除。
+   绘图通道现在只在 Chassis_Apply_Plot_Mode() 里登记一次。 */
 static int16_t RC_Channel(const uint8_t ch) {
     switch (ch) {
         case 0:  return s_dbus->ch0;
         case 1:  return s_dbus->ch1;
-        case 6:
-            /* 四元数 / 姿态调试（8 通道）：
-               qw qx qy qz  <- ★ 这 4 个就是通过 UART1 发给视觉的四元数（w,x,y,z）
-               qroll qpitch qyaw <- EKF 解算的欧拉角 deg
-               cf_pitch     <- 互补滤波的 pitch deg（与 EKF 对比用）
-               ★ 静止时 qw≈1、qx/qy/qz≈0，且 qw^2+qx^2+qy^2+qz^2 应恒为 1
-               ★ 转动云台时四个都会变；若范数不是 1，说明 EKF 有问题 */
-            Serialplot_Set_Data(&user_serialplot, 8,
-                                &user_attitude.qe_q[0], &user_attitude.qe_q[1],
-                                &user_attitude.qe_q[2], &user_attitude.qe_q[3],
-                                &user_attitude.qe_roll, &user_attitude.qe_pitch,
-                                &user_attitude.qe_yaw, &user_attitude.pitch);
-            break;
         case 2:  return s_dbus->ch2;
         case 3:  return s_dbus->ch3;
         default: return 0;
@@ -172,179 +201,27 @@ static void Heading_Pid_Reset(void) {
              CHASSIS_FOLLOW_MAX, CHASSIS_FOLLOW_MAX);
 }
 
-/* 按模式登记上报通道（集中在这里而非 main.c 的 #if 链，才能在线切换）*/
+/* 电机反馈里的 encoder 计数（0 ~ 8191）-> 【单圈绝对机械角】度（0 ~ 360）。
+   ★ GM6020 是直驱（转子 = 输出轴），所以转子单圈角就是"枪/云台的机械角"，
+     上电位置不同读数就不同，掉电不丢（绝对编码器），过零点会从 360 跳回 0。 */
+static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
+    return (float)motor->rotor_angle / PLOT_ENCODER_CPR * 360.0f;
+}
+
+/* 登记本帧要上报的 6 个通道。
+   ★ 单模式：上电就这一套，没有任何模式切换、没有 plot_mode 命令。
+   ★ 通道顺序 / 含义 / 单位 / 上位机设置见本文件顶部的说明块（42~72 行）。
+   ★ 这里只允许出现【float 变量】的地址：Serialplot_Set_Data() 按 sizeof(float)
+     逐 4 字节 memcpy，传非 float 的地址会读到相邻字段的字节 -> NaN / 1e38。
+   ★ 通道数 6 必须与实参个数 6 完全一致（多写/少写都会让 data_num 与指针数不符）。*/
 static void Chassis_Apply_Plot_Mode(void) {
-    const uint8_t mode = (uint8_t)(s_plot_mode + 0.5f);
-
-    switch (mode) {
-        case 3:
-            /* pitch 轴调试（8 通道）：俯仰角 | ptgt 目标角 | pspd 转速 | 外环积分 pid_i |
-               内环积分 psd_i | pcur 电流 mA | pacc 加速度计解算角 | pgyro 陀螺积分角
-               ★ 顶重力的是内环积分 psd_i（稳态非零，pid_i 接近 0）；
-                 松手下沉且 psd_i 顶不上去 -> 加大 pitch_spd_ki/mi
-               ★★ 后两通道是【互补滤波的两个输入】，用来直接观察滤波效果：
-                 pacc  抖动大（吃振动）但不漂
-                 pgyro 很平滑但会缓慢漂走
-                 pitch（第 1 通道）应该【既平滑又不漂】= 互补滤波在起作用 */
-            Serialplot_Set_Data(&user_serialplot, 8,
-                                &user_gimbal.pitch, &user_gimbal.target_pitch,
-                                &user_gimbal.pitch_speed,
-                                &user_gimbal.pitch_pid_angle.iout,
-                                &user_gimbal.pitch_pid_speed.iout,
-                                &user_gimbal.pitch_current,
-                                &user_attitude.pitch_acc, &user_attitude.pitch_gyro);
-            break;
-
-        case 4:
-            /* 射击/总线排错（12 通道）：frpm 摩擦轮实测 | frpm_f 滤波后 | frpm_t 目标转速 |
-               ferr 拨弹轮位置误差 | fcur 滤波后电流 | bpitch 解算俯仰角 | bv0 弹丸初速 |
-               fstate 状态机(0=STOP 1=SPINUP 2=FIRE 3=REVERSE) |
-               online 三电机反馈 bit0=左轮 bit1=右轮 bit2=拨弹轮 | ready 摩擦轮是否到转速 |
-               can1_rx / can2_rx 两条总线的【原始收帧数】累计值（约 +5000/s / +1000~4000/s）
-               ★ fstate 会变(1/2) 但 online=0 -> 电机真没反馈（用 can2_rx 判断：
-                 只按 pitch 的 ~1000/s 涨 = 那 3 个电调根本没在发，查接线/供电/ESC ID）*/
-            Serialplot_Set_Data(&user_serialplot, 12,
-                                &user_shooter.friction_rpm, &user_shooter.friction_rpm_filt,
-                                &user_shooter.fire_rpm,
-                                &user_shooter.feeder_err, &user_shooter.feeder_current_filt,
-                                &user_shooter.ballistics.pitch_deg, &user_shooter.ballistics.v0,
-                                &user_shooter.state_f,
-                                &user_shooter.online_mask, &user_shooter.ready_f,
-                                &user_can_1.rx_count_f, &user_can_2.rx_count_f);
-            break;
-
-        case 5:
-            /* 自瞄调试（6 通道）：vtgt 视觉目标角 | vyaw 实际世界角 | verr 误差 |
-               vdelay 延迟补偿 ms | vok 数据是否有效 | vfps 视觉帧数（看帧率）*/
-            Serialplot_Set_Data(&user_serialplot, 6,
-                                &user_gimbal.yaw_target_ext, &user_gimbal.imu_yaw,
-                                &user_gimbal.aim_err, &user_gimbal.aim_delay_ms,
-                                &user_gimbal.aim_ok_f, &user_vision.frame_count_f);
-            break;
-
-        case 6:
-            /* 四元数 / 姿态调试（8 通道）：
-               qw qx qy qz  <- ★ 这 4 个就是通过 UART1 发给视觉的四元数（w,x,y,z）
-               qroll qpitch qyaw <- EKF 解算的欧拉角 deg
-               cf_pitch     <- 互补滤波的 pitch deg（与 EKF 对比用）
-               ★ 静止时 qw≈1、qx/qy/qz≈0，且 qw^2+qx^2+qy^2+qz^2 应恒为 1
-               ★ 转动云台时四个都会变；若范数不是 1，说明 EKF 有问题 */
-            Serialplot_Set_Data(&user_serialplot, 8,
-                                &user_attitude.qe_q[0], &user_attitude.qe_q[1],
-                                &user_attitude.qe_q[2], &user_attitude.qe_q[3],
-                                &user_attitude.qe_roll, &user_attitude.qe_pitch,
-                                &user_attitude.qe_yaw, &user_attitude.pitch);
-            break;
-        case 7:
-            /* ★ 视觉发送包【镜像】（10 通道）：绘图上显示的就是 tx_packet 里真正要发出去的字节内容。
-               所以"这里在变 + tx_frames 在涨" = 电控确实把四元数和欧拉角发给了视觉。
-               tx_qw tx_qx tx_qy tx_qz  <- packet.q[0..3]，四元数 w,x,y,z
-               tx_yaw  tx_yawv          <- packet.yaw / yaw_vel (deg, deg/s)
-               tx_pitch tx_pitchv       <- packet.pitch / pitch_vel (deg, deg/s)
-               tx_bspd                  <- packet.bullet_speed (m/s)
-               tx_frames                <- 已发送帧数，应持续增长（100/秒）
-               ★ 判据：tx_frames 在涨 + 转动云台时 tx_qx/qy/qz 跟着变 -> 发送链路完全正常 */
-            Serialplot_Set_Data(&user_serialplot, 10,
-                                &user_vision.tx_packet.q[0], &user_vision.tx_packet.q[1],
-                                &user_vision.tx_packet.q[2], &user_vision.tx_packet.q[3],
-                                &user_vision.tx_packet.yaw, &user_vision.tx_packet.yaw_vel,
-                                &user_vision.tx_packet.pitch, &user_vision.tx_packet.pitch_vel,
-                                &user_vision.tx_packet.bullet_speed, &user_vision.tx_count_f);
-            break;
-
-        case 8:
-            /* ★★ 自瞄接管 / 数据闸门调试（8 通道）：
-               ptgt_e 视觉给的 pitch 目标角（已过闸门的绝对角）| pitch 实际俯仰角 |
-               ptgt   最终目标角（含延迟外推）| perr pitch 视觉误差 |
-               pff    pitch 视觉角速度前馈 deg/s | take 本拍是否由视觉接管(1/0) |
-               ok     视觉数据是否有效(1/0) | auto 使能开关 yaw_auto
-               ★ 判据：
-                 auto=1 且 take=1 且 ok=1 -> 视觉正在控制（ptgt_e 应贴着 pitch 走）
-                 ok 一直闪 0 或 auto 自己掉成 0 -> 视觉数据被判无效（看 yaw 侧
-                 plot_mode=5 的 vfps/vok；连续 5 帧无效会退出接管，需要重新 yaw_auto=1）*/
-            Serialplot_Set_Data(&user_serialplot, 8,
-                                &user_gimbal.pitch_target_ext, &user_gimbal.pitch,
-                                &user_gimbal.target_pitch, &user_gimbal.pitch_aim_err,
-                                &user_gimbal.pitch_aim_rate, &user_gimbal.aim_takeover,
-                                &user_gimbal.aim_ok_f, &user_gimbal.yaw_auto);
-            break;
-
-        case 9:
-            /* ★★ 视觉【接收包】镜像（8 通道 / Frame Size 32）—— 专门用来"把视觉发过来的数据画出来"。
-               数据源：user_vision.target_* （包内是【弧度】，这里已 ×VISION_PKG2DEG 换成【度】）
-                       + 状态量的 float 镜像（Serialplot_Set_Data 只按 float 读，
-                         uint8_t/uint32_t 不能直接传地址，见 user_vision.h 的 float 镜像字段）。
-               ★ SerialPlot 里要设：Frame Start AB / #Channels 8 / Frame Size 32
-               通道含义与单位：
-                 mode    视觉给的控制模式（0=不给控制 1=只给控制 2=控制+请求开火），无量纲
-                 vtgt    目标 yaw 角，度
-                 vpit    目标 pitch 角，度
-                 vvyaw   目标 yaw 角速度（可当速度前馈），度/秒
-                 vpitch  目标 pitch 角速度（可当速度前馈），度/秒
-                 vok     视觉是否在线（1=在线 0=离线），0-1
-                 vfps    累计有效帧数（看帧率，稳定增长说明链路通），计数
-                 vcrc    累计 CRC 坏帧数（链路质量），计数
-               ★ 判据：vok=1 且 vfps 稳定增长 -> 视觉链路正常；
-                 转动/移动目标时 vtgt/vpit 跟着动 -> 视觉确实在跟踪；
-                 vfps 不涨而 vcrc 涨 -> 波特率/线材/共地有问题（坏帧被丢，云台不会乱动）。*/
-            Serialplot_Set_Data(&user_serialplot, 8,
-                                &user_vision.rx_mode_f, &user_vision.target_yaw_deg,
-                                &user_vision.target_pitch_deg, &user_vision.target_yaw_vel_deg,
-                                &user_vision.target_pitch_vel_deg, &user_vision.online_f,
-                                &user_vision.frame_count_f, &user_vision.crc_error_f);
-            break;
-
-        case 10:
-            /* ★★ 自瞄【跟随效果】视图（4 通道 / Frame Size 16）—— 专看"视觉给的目标值"和
-               "云台实际角"拟合/跟随得怎么样。两个轴各一对（目标 + 实际）：
-                 vis_yaw    视觉给的目标 yaw 角（= target_yaw_deg，已是【度】）        度
-                 my_yaw     云台【实际】世界 yaw 角（imu_yaw）                        度
-                 tgt_pitch  pitch 控制环的【内部目标关节角】（target_pitch）          度
-                 my_pitch   云台【实际】pitch 关节角（pitch）                        度
-               ★ SerialPlot 里要设：Frame Start AB / #Channels 4 / Frame Size 16
-               ★ 判据（"跟随"看的是两条的重合度，不是单条曲线好不好看）：
-                 vis_yaw 与 my_yaw 应【贴着走】：my_yaw 略滞后是正常的（控制延迟），
-                   但稳态误差应接近 0；只朝一个方向差一截 = 有静差（前馈/积分不够）；
-                   两条【反号】= 电控内部 yaw 方向反了（配合 tools/vision_echo_test.py
-                   的回环实验一起定位：那个实验把"姿态角"原样当"目标角"发回来，
-                   绘图上两者反号就说明是电控内部反向）。
-                 tgt_pitch 与 my_pitch 同理。
-               ★★ 为什么 pitch 这一对用【内部目标关节角】而不是直接画"视觉给的 pitch"：
-                 视觉发来的 pitch 与内部 pitch 关节角的【坐标系/零点不同】，直接比会差一个
-                 常量甚至符号，看上去"永远不重合"；target_pitch 是视觉目标 + 拨轮偏置 +
-                 延迟外推之后真正写进 pitch 控制环的最终目标角，和实际 pitch 在同一坐标系里，
-                 所以只有这一对才准确反映跟随效果。（要看"视觉原样发过来什么"用模式 9 的 vpit。）
-               ★ 本模式只登记画图通道，不改变任何控制量。*/
-            Serialplot_Set_Data(&user_serialplot, 4,
-                                &user_vision.target_yaw_deg, &user_gimbal.imu_yaw,
-                                &user_gimbal.target_pitch, &user_gimbal.pitch);
-            break;
-
-        case 2:
-            /* 云台 yaw 调试（5 通道）：gyaw 相对底盘角 | gtgt 世界目标角 | gimu IMU 世界角 |
-               gcmd 目标转速 | gspd 实际转速。gtgt/gimu 贴合 -> 锁世界；gcmd/gspd -> 速度环 */
-            Serialplot_Set_Data(&user_serialplot, 5,
-                                &user_gimbal.yaw, &user_gimbal.target_yaw,
-                                &user_gimbal.imu_yaw, &user_gimbal.target_speed,
-                                &user_gimbal.speed);
-            break;
-
-        case 1:
-            /* 底盘 4 轮 目标 / 反馈转子转速 */
-            Serialplot_Set_Data(&user_serialplot, 8,
-                                &user_chassis.rpm[0], &user_chassis.rpm_fdb[0],
-                                &user_chassis.rpm[1], &user_chassis.rpm_fdb[1],
-                                &user_chassis.rpm[2], &user_chassis.rpm_fdb[2],
-                                &user_chassis.rpm[3], &user_chassis.rpm_fdb[3]);
-            break;
-
-        default:
-            /* 0 = 姿态 */
-            Serialplot_Set_Data(&user_serialplot, 4,
-                                &user_attitude.yaw, &user_attitude.pitch,
-                                &user_chassis.omega, &user_chassis.vx);
-            break;
-    }
+    Serialplot_Set_Data(&user_serialplot, 6,
+                        &s_yaw_encoder_abs,        /* ch1 YAW 单圈绝对角    度 0~360 */
+                        &user_gimbal.yaw,          /* ch2 YAW 相对角        度 ±180  */
+                        &s_pitch_encoder_abs,      /* ch3 pitch 单圈绝对角  度 0~360 */
+                        &user_gimbal.pitch,        /* ch4 pitch 相对角      度 ±180  */
+                        &user_gimbal.target_yaw,   /* ch5 遥控目标 YAW      度 ±180  */
+                        &user_gimbal.target_pitch);/* ch6 遥控目标 PITCH    度       */
 }
 
 void ChassisControl_Init(Chassis* chassis, DBUS_DRIVES* dbus) {
@@ -373,6 +250,14 @@ void ChassisControl_Set_SourceValid(Chassis_SourceValid valid) {
 }
 
 void ChassisControl_Update(void) {
+    /* ---- ★★ 绘图用 float 镜像（1kHz 同步）----
+       必须在【所有 early-return 之前】更新：遥控器断线、单轮测试这些分支都会提前
+       return，镜像放在后面就会冻住，看起来像"这两个通道没数据"。
+       原始量 rotor_angle 是 uint16_t，不能把它的地址传给 Serialplot_Set_Data
+       （它按 float 逐 4 字节 memcpy），所以必须先换算成 float 存到镜像里。*/
+    s_yaw_encoder_abs   = Chassis_Encoder_SingleTurn_Deg(&user_gimbal_yaw_motor);
+    s_pitch_encoder_abs = Chassis_Encoder_SingleTurn_Deg(&user_gimbal_pitch_motor);
+
     if (s_chassis == NULL || s_dbus == NULL) {
         return;
     }
@@ -510,12 +395,8 @@ void ChassisControl_JScopeCallback(void* arg) {
 /* ---- 在线调参变量表 ---- */
 
 static const SERIALPLOT_VAR chassis_tunable[] = {
-    /* 串口绘图通道在线切换（发 plot_mode=N#）：0=姿态(4ch) 1=底盘4轮(8ch) 2=云台yaw(5ch)
-       3=云台pitch(6ch) 4=射击机构(8ch) 5=自瞄(6ch) 6=四元数(8ch) 7=视觉发送包镜像(10ch)
-       8=自瞄接管(8ch) 9=视觉接收包镜像(8ch/Frame Size 32)
-       10=自瞄跟随(4ch/Frame Size 16：vis_yaw/my_yaw/tgt_pitch/my_pitch)。
-       ⚠️ 上位机通道数也要跟着改（serialplot.py COM4 N）*/
-    {"plot_mode",  &s_plot_mode,   0.0f,  10.0f,  Chassis_Apply_Plot_Mode},
+    /* ★ 串口绘图现在只有一个固定模式（6 通道），原来的 plot_mode 项已删除，
+       没有在线切换、也没有 plot_mode 命令。通道定义见 Chassis_Apply_Plot_Mode()。*/
     {"test_wheel", &s_test_wheel, -4.0f, 4.0f,   NULL},
     {"test_rpm",   &s_test_rpm,    0.0f, 3000.0f, NULL},
     /* ⚠️ 上限必须是 CHASSIS_MAX_W：Chassis_Set_Velocity 里有幅值钳位，
@@ -586,8 +467,10 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"gimbal_max_out", &user_gimbal_yaw_pid.max_out, 0.0f, 16384.0f, NULL},
 
     /* ---- ★★ 自瞄（视觉接管）----
-       顺序建议：先 plot_mode=5# 看 vtgt/vyaw/verr/vok/vfps 确认视觉链路通了，
+       顺序建议：先看串口绘图的 ch5/ch6（遥控目标 YAW / PITCH）确认云台听摇杆，
        再 yaw_auto=1# 让视觉接管；pitch 与 yaw 共用同一份"有效/无效"判定。
+       （原来看视觉链路用的是 plot_mode=5 那套通道，多模式已删除；要排查视觉链路
+         直接用 tools/vision_rx_test.py 或 tools/vision_echo_test.py。）
        ⚠️ aim_ff_gain / aim_ff_pitch 就是参考工程的 0.5 / 0.6（yaw / pitch 的角速度前馈系数）。
           允许填负值：万一实测前馈方向相反（表现为"抢跑/越追越远"），直接把符号翻过来。
        ⚠️ yaw_auto 会被数据闸门自动清零（连续 5 帧视觉数据无效 -> 退出接管回摇杆），
