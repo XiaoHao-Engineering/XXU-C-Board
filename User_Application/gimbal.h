@@ -191,6 +191,45 @@
      视觉跟快速移动目标觉得跟不上就把这个值调小（0~10ms）。在线调 gimbal_tgt_smooth。 */
 #define GIMBAL_TGT_SMOOTH_MS    (12.0f)  /* ★ 实测有效(2026-10-17)：25->12 后滞后更小、整体更贴合；代价是峰值有 ~1.5° 轻微过冲，靠 GIMBAL_WORLD_KD 补阻尼。0=关闭平滑 */
 
+/* ================= yaw 上电回位（boot homing，与 pitch 那套对称） =================
+   用户要求：上电后 yaw 也要"回到绝对编码器 76.333°"，而且要【稳稳地转过去】，
+   不能一步把目标写到位（那会被位置环当成阶跃，冲过头/甩一下）。
+
+   ★ 关键：yaw 的目标角是【世界系】，而 0.966° 是【关节角】（编码器相对角）。
+     直接 target_yaw = 0.966 是错的（那是关节角，方向/基准都不一样）。
+     上电瞬间云台静止，在"首次对齐"那一拍一次性折算：
+         关节角 = gimbal->yaw，世界反馈 = world_yaw
+         target_yaw = world_yaw + (GIMBAL_YAW_BOOT_TARGET_DEG - gimbal->yaw)
+     之后每拍只让 target_yaw 以 GIMBAL_YAW_HOMING_RATE_DEG_S 为上限逼近这个目标。
+
+   实测（2026-10-17，本次上电读数）：
+     YAW 绝对单圈编码器 = 76.333°，YAW 关节角 = 0.966°
+     => 偏移 = 76.333 − 0.966 = 75.367°（见下面的 GIMBAL_YAW_ABS_TO_JOINT_OFFSET）
+     => "回到绝对 76.333°" 等价于 "把 yaw 关节角驱到 0.966°"。
+
+   与 pitch 的差别：
+     ① pitch 是绝对关节角，target_pitch 可以直接写成 9.1403；
+        yaw 是世界锁，目标角必须先按上面的折算换成世界角。
+     ② pitch 每拍把目标写成固定角（阶跃）；yaw 这里额外加了【限速】，
+        每拍最多走 rate×dt（25°/s × 1ms = 0.025°/拍），所以是"平滑转过去"。
+     ③ 零点：pitch 首次标定按绝对角换算；yaw 在 GIMBAL_YAW_BOOT_TO_FIXED=1 且
+        本次上电还没回过位（yaw_boot_homed==0）时，也按绝对单圈角换算。
+        用户主动调用的 Gimbal_Set_Zero() 仍是"就地清零"，语义不变。
+
+   宏开关：GIMBAL_YAW_BOOT_TO_FIXED=1 启用；填 0 恢复旧行为（上电就地清零、停在哪儿保持哪儿）。
+   ⚠️ 本折算按当前实测的 GIMBAL_YAW_DIR=+1 书写；若现场把 GIMBAL_YAW_DIR 改成 -1，
+      绝对角与关节角的正负关系要重新标定（GIMBAL_YAW_ABS_TO_JOINT_OFFSET 和本折算一起核对）。
+   观测量：user_gimbal.yaw_boot_homing（1=还在回位）、user_gimbal.yaw_boot_homed
+           （1=本次上电的回位已结束）。 */
+#define GIMBAL_YAW_ABS_TO_JOINT_OFFSET   (75.367f)  /* yaw 关节角 = 绝对单圈角 − 本偏移（实测 76.333−0.966）*/
+#define GIMBAL_YAW_BOOT_TO_FIXED         (1)        /* 1=上电回位；0=关闭（保持旧行为）*/
+#define GIMBAL_YAW_BOOT_TARGET_DEG       (0.966f)   /* 上电回位目标关节角 = 绝对 76.333° */
+#define GIMBAL_YAW_BOOT_HOMING_TOL_DEG   (0.5f)     /* 到位判据：世界误差 ±0.5° */
+#define GIMBAL_YAW_BOOT_HOMING_TOL_TIGHT_DEG (1.0f) /* 到位判据：关节角误差 ±1.0°（与世界误差同时满足）*/
+#define GIMBAL_YAW_BOOT_HOMING_HOLD_MS   (150U)     /* 到位防抖：连续满足这么久才退出 */
+#define GIMBAL_YAW_BOOT_HOMING_TIMEOUT_MS (8000U)  /* 超时。25度/s x 8s = 200度 > yaw 最大初差 180度，保证任何上电姿态都能走到位（原 5s 只够 125 度）*/
+#define GIMBAL_YAW_HOMING_RATE_DEG_S     (25.0f)    /* ★ 回位时目标角的最大逼近速度 deg/s ——"稳稳转过去"的关键 */
+
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
    ✅ 本车已确认 = 1：C 板装在 yaw 与 pitch 的连接处（相当于"头部"），
@@ -402,6 +441,16 @@ typedef struct {
        ch2 的 yaw 是编码器【相对角】（另一个坐标系），不能直接拿来算误差。 */
     float yaw_fb;
     float target_speed;            /* 目标转子转速 RPM（观察用）*/
+
+    /* ---- yaw 上电回位（boot homing）状态，见 gimbal.h 里 GIMBAL_YAW_BOOT_HOMING_* ----
+       ★ 与 pitch 那套完全对称：yaw_boot_homed 只在【本次上电的回位真正结束】后才置 1
+         （到位/推杆/视觉接管/超时），所以掉线重连不会重新回位；回位进行中掉线则保留状态继续。 */
+    uint8_t  yaw_boot_homing;      /* 1=正在执行上电回位（此时 target_yaw 每拍限速逼近 yaw_homing_target）*/
+    uint8_t  yaw_boot_homed;       /* 1=本次上电的回位已结束，掉线重连不再回位 */
+    uint16_t yaw_homing_ms;        /* 回位已进行的时间 ms（超时判据，1kHz 下每拍 +1）*/
+    uint16_t yaw_homing_in_pos_ms; /* 连续到位的时间 ms（到位判据的防抖计数）*/
+    float    yaw_homing_target;    /* 回位目标在世界系的目标角 deg（首次对齐时一次性折算，±180）*/
+
     SysTick_Task task;
 
     uint32_t last_rx_count;        /* 上一周期收到的反馈累计次数 */
@@ -449,7 +498,11 @@ typedef struct {
 
 void  Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor);
 
-/* 把当前位置记成云台正前方（零点对齐）；上电时 Gimbal_Update 自动调用一次，掉线重连后也会重新对齐 */
+/* 把【当前位置】记成云台正前方（就地清零）—— 这是用户主动调用（按键清零/上电对准）时的语义，
+   ⇔ zero_deg = 当前编码器角、yaw/target_yaw/target_yaw_smooth 全部归零。
+   ★ 上电首次对齐且 GIMBAL_YAW_BOOT_TO_FIXED=1 时【不走本函数】：那条路按绝对单圈编码器换算
+     （关节角 = 绝对角 − GIMBAL_YAW_ABS_TO_JOINT_OFFSET），见 gimbal.c 首次对齐段。
+   ★ 本次上电回位已结束（yaw_boot_homed=1）后的掉线重连仍调用本函数，保持"保持原位"的原行为。 */
 void  Gimbal_Set_Zero(GIMBAL_DRIVES* gimbal);
 
 /* 云台相对底盘的角度 deg，逆时针为正，范围 ±180 */

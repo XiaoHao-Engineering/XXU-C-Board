@@ -25,6 +25,13 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->yaw = 0.0f;
     gimbal->target_yaw = 0.0f;
     gimbal->target_yaw_smooth = 0.0f;   /* 上电时平滑值与目标角一致（真正对齐在后面 target_yaw = imu_yaw 处）*/
+    /* ★ yaw 上电回位（boot homing）状态：每次上电 Gimbal_Init 只跑一次，所以
+       yaw_boot_homed==0 就是"本次上电还没回过位"，比 has_ever_online 可靠（后者第一帧就置 1）。 */
+    gimbal->yaw_boot_homing = 0;
+    gimbal->yaw_boot_homed = 0;
+    gimbal->yaw_homing_ms = 0;
+    gimbal->yaw_homing_in_pos_ms = 0;
+    gimbal->yaw_homing_target = 0.0f;
     gimbal->tgt_smooth_ms = GIMBAL_TGT_SMOOTH_MS;   /* 目标角平滑时间常数 ms，0 = 关闭平滑 */
     gimbal->last_rx_count = 0;
     gimbal->offline_ms = 0;
@@ -344,18 +351,58 @@ static void Gimbal_Update(void* arg) {
 #endif
 
     /* 首次对齐：绝对编码器只知道"转子在哪"，上电时 zero_deg 还是旧值，直接下发会把云台猛拉向编码器
-       零位；所以等第一帧反馈到了，以【当前位置】为零点，对齐完成前不发任何指令 */
+       零位；所以等第一帧反馈到了再对齐，对齐完成前不发任何指令。
+       ★ yaw 有两条路，必须区分：
+         ① 上电首次对齐 + 本次上电还没回过位（yaw_boot_homed==0）
+            -> 按【绝对单圈编码器】换算关节零点（关节角 = 绝对角 − 75.367），
+               这样 target=0.966° 永远等于绝对 76.333°，与上电姿态无关；
+         ② 其它情况（GIMBAL_YAW_BOOT_TO_FIXED=0、或回位已结束后的掉线重连）
+            -> 调用 Gimbal_Set_Zero() 就地清零，保持原行为。
+       用户主动调用 Gimbal_Set_Zero()（按键清零/上电对准）走的仍是②的就地清零语义。 */
     if (!gimbal->is_aligned) {
         if (!gimbal->is_online) {
             return;
         }
-        Gimbal_Set_Zero(gimbal);
-#if GIMBAL_LOCK_WORLD
-        gimbal->target_yaw = gimbal->imu_yaw;   /* 世界目标 = 当前世界朝向 */
-        /* ★ 平滑目标角必须一起对齐：否则这一拍 smooth 还是旧值（0 或掉线前的值），
-           位置环会把云台往那儿拉一下，表现成"上电/重连后甩一下再回来" */
-        gimbal->target_yaw_smooth = gimbal->target_yaw;
+#if GIMBAL_YAW_BOOT_TO_FIXED && GIMBAL_LOCK_WORLD
+        if (gimbal->yaw_boot_homed == 0) {
+            /* ⚠️ 必须先读 rotor_angle，再 Set_Angle_Here：后者会改 total_angle/零点。
+               GM6020 反馈里的 rotor_angle 是 0~8191 的单圈计数 -> 0~360°（与 pitch 首次标定、
+               chassis_control.c 的 Chassis_Encoder_SingleTurn_Deg 同一换算）。
+               注：Set_Angle_Here 内部按 8192 计数（≈0.0439°）量化零点，误差 < 1 个计数。 */
+            const float abs_deg_before = (float)gimbal->yaw_motor->rotor_angle / 8192.0f * 360.0f;
+            DJI_Motor_Set_Angle_Here(gimbal->yaw_motor,
+                                     abs_deg_before - GIMBAL_YAW_ABS_TO_JOINT_OFFSET);
+            gimbal->zero_deg = 0.0f;              /* Get_Angle() 现在直接就是关节角 */
+            gimbal->yaw = Gimbal_Get_Yaw(gimbal); /* 关节角 = 绝对角 − 75.367（实测 76.333 -> 0.966）*/
+#if GIMBAL_IMU_ON_GIMBAL
+            const float world_now = Gimbal_Wrap180(gimbal->imu_yaw - gimbal->bias_accum);
+#else
+            const float world_now = Gimbal_Wrap180(gimbal->imu_yaw + gimbal->yaw);
 #endif
+            /* ★ 世界目标从【当前世界朝向】起步（位置环本拍误差=0，绝不会一上来就窜），
+               真正的回位目标 yaw_homing_target 在这里一次性折算：
+                 需要 target_yaw = world_yaw + (0.966 − gimbal->yaw)
+               之后由每拍的限速状态机把 target_yaw 慢慢挪过去。
+               ★ 上电瞬间云台静止，所以这里的"一次性折算"是准确的；回位中掉线重连时
+                 也会在这里按当前姿态重新折算，继续回位。 */
+            gimbal->target_yaw = world_now;
+            gimbal->target_yaw_smooth = gimbal->target_yaw;
+            gimbal->yaw_homing_target =
+                Gimbal_Wrap180(world_now + (GIMBAL_YAW_BOOT_TARGET_DEG - gimbal->yaw));
+            gimbal->yaw_boot_homing = 1;
+            gimbal->yaw_homing_ms = 0;
+            gimbal->yaw_homing_in_pos_ms = 0;
+        } else
+#endif
+        {
+            Gimbal_Set_Zero(gimbal);
+#if GIMBAL_LOCK_WORLD
+            gimbal->target_yaw = gimbal->imu_yaw;   /* 世界目标 = 当前世界朝向 */
+            /* ★ 平滑目标角必须一起对齐：否则这一拍 smooth 还是旧值（0 或掉线前的值），
+               位置环会把云台往那儿拉一下，表现成"上电/重连后甩一下再回来" */
+            gimbal->target_yaw_smooth = gimbal->target_yaw;
+#endif
+        }
         gimbal->is_aligned = 1;
     }
 
@@ -446,6 +493,67 @@ static void Gimbal_Update(void* arg) {
          ch7 - ch5 = 真实跟随误差；ch2 的编码器相对角是另一个坐标系，不能这样相减。
        ★ 单位 deg，±180；对齐前（未进位置环）保持上次值/初值 0。 */
     gimbal->yaw_fb = world_yaw;
+
+#if GIMBAL_YAW_BOOT_TO_FIXED
+    /* ★★ yaw 上电回位（boot homing）状态机 ------------------------------------------
+       位置：摇杆积分 / 视觉接管 / 上电首次对齐【都已经写完 target_yaw】之后，
+             target_yaw_smooth 与位置误差【之前】（就在下面）。所以：
+               · 本拍再没有任何分支能在它之后改 target_yaw —— 回位期间目标角优先级最高；
+               · target_yaw_smooth 一定在限速之后才计算 -> 平滑器看到的是一条连续、
+                 已经限过速的轨迹，而不是上电瞬间的阶跃。
+       与 pitch 的区别：pitch 直接每拍写 target_pitch=9.1403；yaw 的目标是【世界系】，
+       而且用户要求"稳稳转过去"，所以这里不一步到位，而是让 target_yaw 每拍最多走
+       step = GIMBAL_YAW_HOMING_RATE_DEG_S × GIMBAL_DT_S（25°/s × 1ms = 0.025°/拍）
+       地逼近 yaw_homing_target。yaw_homing_target 只在上面首次对齐时折算一次。
+       退出条件（任一）：
+         ① 到位：世界误差 |yaw_homing_target − world_yaw| <= 0.5° 且
+                 关节误差 |0.966 − gimbal->yaw| <= 1.0°，连续保持 150ms
+                 （保持是为了防"冲过头路过目标"被误判成到位）；
+         ② 用户推杆（Gimbal_Stick 在死区内返回 0，所以 stick != 0 即"有意推杆"）
+            或视觉自瞄已接管 -> 立即交权，绝不和用户/视觉抢；
+         ③ 超时 5000ms：堵转、机械卡住、目标进不去时不能永远霸占目标角。
+       退出时只清标志，target_yaw 保持本拍的值（不跳变）：到位时它已经等于
+       yaw_homing_target；推杆/视觉接管时它是上面分支刚写好的用户/视觉目标。
+       ★ 与掉线重连：回位【结束】才置 yaw_boot_homed=1，之后重连保持原位（原行为）；
+         回位【进行中】掉线则保留 yaw_boot_homing，恢复对齐后重新折算并继续回位。 */
+    if (gimbal->yaw_boot_homing) {
+        if (stick != 0.0f || gimbal->aim_takeover > 0.5f) {
+            /* ② 人为动作 / 视觉接管：本拍上面分支写的目标保留，立即交权 */
+            gimbal->yaw_boot_homing = 0;
+            gimbal->yaw_boot_homed = 1;
+        } else if (gimbal->yaw_homing_ms >= GIMBAL_YAW_BOOT_HOMING_TIMEOUT_MS) {
+            /* ③ 超时兜底 */
+            gimbal->yaw_boot_homing = 0;
+            gimbal->yaw_boot_homed = 1;
+        } else {
+            gimbal->yaw_homing_ms++;        /* 本任务固定 1kHz，+1 = +1ms */
+
+            /* ★ 限速逼近：每拍最多走 step = 25°/s × 1ms = 0.025°。
+               用 Wrap180 求差，避免目标与当前值落在 ±180 两侧时朝反方向绕一整圈。 */
+            const float step = GIMBAL_YAW_HOMING_RATE_DEG_S * GIMBAL_DT_S;
+            float d = Gimbal_Wrap180(gimbal->yaw_homing_target - gimbal->target_yaw);
+            if (d >  step) { d =  step; }
+            if (d < -step) { d = -step; }
+            gimbal->target_yaw = Gimbal_Wrap180(gimbal->target_yaw + d);
+
+            /* ① 到位判定：世界误差 + 关节误差同时满足，并连续保持 HOLD_MS */
+            if (fabsf(Gimbal_Wrap180(gimbal->yaw_homing_target - world_yaw))
+                    <= GIMBAL_YAW_BOOT_HOMING_TOL_DEG
+                && fabsf(GIMBAL_YAW_BOOT_TARGET_DEG - gimbal->yaw)
+                    <= GIMBAL_YAW_BOOT_HOMING_TOL_TIGHT_DEG) {
+                if (gimbal->yaw_homing_in_pos_ms < GIMBAL_YAW_BOOT_HOMING_HOLD_MS) {
+                    gimbal->yaw_homing_in_pos_ms++;
+                }
+                if (gimbal->yaw_homing_in_pos_ms >= GIMBAL_YAW_BOOT_HOMING_HOLD_MS) {
+                    gimbal->yaw_boot_homing = 0;
+                    gimbal->yaw_boot_homed = 1;
+                }
+            } else {
+                gimbal->yaw_homing_in_pos_ms = 0;
+            }
+        }
+    }
+#endif
 
     /* ★★★ 目标角一阶平滑（治"调过去晃一下再回来"最有效的一条）--------------------
        摇杆给的是【阶跃式】目标角：松杆那一刻 target_yaw 突然停住/拐弯，位置环看到的是
