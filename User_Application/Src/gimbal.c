@@ -211,11 +211,35 @@ float Gimbal_Get_Pitch(const GIMBAL_DRIVES* gimbal) {
     return (gimbal != NULL) ? gimbal->pitch : 0.0f;
 }
 
+/* ★ 把目标角夹在软限位内（全文件唯一一份通用 clamp 实现）：
+   否则摇杆推到底时 target_pitch 会一路累积超出机械行程，导致误差持续增大、云台顶在
+   限位上（实测会冲到 +33/−13，限位是 +28.6/−10.8）。
+   调用点只有两处，都是同一个函数：
+     ① Gimbal_Set_Pitch_Target：弹道/自瞄的 50Hz 外部写入点，写完立即夹 —— 本函数跑在
+        1kHz 云台任务之外，不夹的话字段会以原始解算角一直停到下一拍；
+     ② Gimbal_Pitch_Update：摇杆积分/视觉/回位全部写完之后、下发之前的每拍最终闸门。 */
+static void Gimbal_Clamp_Pitch_Target(GIMBAL_DRIVES* gimbal) {
+    if (gimbal->target_pitch > GIMBAL_PITCH_MAX_DEG) {
+        gimbal->target_pitch = GIMBAL_PITCH_MAX_DEG;
+    }
+    if (gimbal->target_pitch < GIMBAL_PITCH_MIN_DEG) {
+        gimbal->target_pitch = GIMBAL_PITCH_MIN_DEG;
+    }
+}
+
 void Gimbal_Set_Pitch_Target(GIMBAL_DRIVES* gimbal, const float deg) {
     if (gimbal == NULL) {
         return;
     }
     gimbal->target_pitch = deg;
+
+    /* ★ 写入即合法：本函数被 50Hz 的弹道/自瞄任务在【1kHz 云台任务之外】调用，
+       不在这里夹的话，字段会以原始解算角一直停到下一拍才被最终闸门夹住；
+       这期间任何读取者（串口绘图 ch6 直接读本字段）都可能读到 +33/−13 这种越界值，
+       而实际角被软限位挡在 +29/−10，看起来就像"目标越过限位还在累积"。
+       这里调用的是与最终闸门相同的函数，不是第二份 clamp 逻辑。 */
+    Gimbal_Clamp_Pitch_Target(gimbal);
+
     gimbal->pitch_auto = 1.0f;
 }
 
@@ -691,12 +715,10 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
 #endif
 
     /* 软限位：夹住目标角；目标固定后误差不再增大、积分也不再涨，等于顺带做了抗积分饱和。
-       ★ 自瞄目标在闸门里已经用同一对 MIN/MAX（留 1° 余量）判过有效性，这里是最终夹紧 */
-    if (gimbal->target_pitch > GIMBAL_PITCH_MAX_DEG) {
-        gimbal->target_pitch = GIMBAL_PITCH_MAX_DEG;
-    } else if (gimbal->target_pitch < GIMBAL_PITCH_MIN_DEG) {
-        gimbal->target_pitch = GIMBAL_PITCH_MIN_DEG;
-    }
+       ★ 自瞄目标在闸门里已经用同一对 MIN/MAX（留 1° 余量）判过有效性，这里是最终夹紧。
+       ★ 位置：摇杆积分 / 视觉接管 / 弹道(pitch_auto) / 上电回位 全部写完之后、下发之前；
+         调用唯一实现 Gimbal_Clamp_Pitch_Target()，与外部写入点共用同一份限位逻辑。 */
+    Gimbal_Clamp_Pitch_Target(gimbal);
 
     /* ★★ 视觉角速度前馈 -> 【速度环目标】--------------------------------------------
        参考工程走的是 Motor_Pitch.Set_Feedforward_Omega(0.6 × 视觉角速度)
