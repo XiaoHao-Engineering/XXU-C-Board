@@ -222,7 +222,7 @@
    观测量：user_gimbal.yaw_boot_homing（1=还在回位）、user_gimbal.yaw_boot_homed
            （1=本次上电的回位已结束）。 */
 #define GIMBAL_YAW_ABS_TO_JOINT_OFFSET   (75.367f)  /* yaw 关节角 = 绝对单圈角 − 本偏移（实测 76.333−0.966）*/
-#define GIMBAL_YAW_BOOT_TO_FIXED         (1)        /* 1=上电回位；0=关闭（保持旧行为）*/
+#define GIMBAL_YAW_BOOT_TO_FIXED         (0)        /* ★ 暂时关闭(2026-10-17)：实测出现"偶尔反转且停不下来"，疑为 yaw 绝对角与关节角方向相反(-1)或世界系折算符号错。待用户提供第二个标定点确认方向后再启用。1=启用 */
 #define GIMBAL_YAW_BOOT_TARGET_DEG       (0.966f)   /* 上电回位目标关节角 = 绝对 76.333° */
 #define GIMBAL_YAW_BOOT_HOMING_TOL_DEG   (0.5f)     /* 到位判据：世界误差 ±0.5° */
 #define GIMBAL_YAW_BOOT_HOMING_TOL_TIGHT_DEG (1.0f) /* 到位判据：关节角误差 ±1.0°（与世界误差同时满足）*/
