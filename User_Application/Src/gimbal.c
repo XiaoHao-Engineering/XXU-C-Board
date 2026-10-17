@@ -24,6 +24,8 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->zero_deg = GIMBAL_YAW_ZERO_DEG;
     gimbal->yaw = 0.0f;
     gimbal->target_yaw = 0.0f;
+    gimbal->target_yaw_smooth = 0.0f;   /* 上电时平滑值与目标角一致（真正对齐在后面 target_yaw = imu_yaw 处）*/
+    gimbal->tgt_smooth_ms = GIMBAL_TGT_SMOOTH_MS;   /* 目标角平滑时间常数 ms，0 = 关闭平滑 */
     gimbal->last_rx_count = 0;
     gimbal->offline_ms = 0;
     gimbal->is_online = 0;
@@ -33,6 +35,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->max_w = GIMBAL_YAW_MAX_W;
     gimbal->world_kp = GIMBAL_WORLD_KP;
     gimbal->world_kd = GIMBAL_WORLD_KD;
+    gimbal->world_d_alpha = GIMBAL_WORLD_D_ALPHA;   /* 可在线改：gimbal_world_da */
     gimbal->world_dead = GIMBAL_WORLD_DEAD_DEG;
     gimbal->rate_slew = GIMBAL_RATE_SLEW;
     gimbal->yaw_rate_lpf = 0.0f;
@@ -95,6 +98,7 @@ void Gimbal_Set_Zero(GIMBAL_DRIVES* gimbal) {
     gimbal->zero_deg = DJI_Motor_Get_Angle(gimbal->yaw_motor);
     gimbal->yaw = 0.0f;
     gimbal->target_yaw = 0.0f;
+    gimbal->target_yaw_smooth = 0.0f;   /* 平滑目标一起归零，否则重连会从旧值慢慢爬过来 */
 }
 
 float Gimbal_Get_Yaw(const GIMBAL_DRIVES* gimbal) {
@@ -339,6 +343,9 @@ static void Gimbal_Update(void* arg) {
         Gimbal_Set_Zero(gimbal);
 #if GIMBAL_LOCK_WORLD
         gimbal->target_yaw = gimbal->imu_yaw;   /* 世界目标 = 当前世界朝向 */
+        /* ★ 平滑目标角必须一起对齐：否则这一拍 smooth 还是旧值（0 或掉线前的值），
+           位置环会把云台往那儿拉一下，表现成"上电/重连后甩一下再回来" */
+        gimbal->target_yaw_smooth = gimbal->target_yaw;
 #endif
         gimbal->is_aligned = 1;
     }
@@ -422,7 +429,33 @@ static void Gimbal_Update(void* arg) {
     /* IMU 装在底盘上：云台世界朝向 = 底盘世界朝向 + 云台相对底盘的编码器角 */
     const float world_yaw = Gimbal_Wrap180(gimbal->imu_yaw + gimbal->yaw);
 #endif
-    float error = Gimbal_Wrap180(gimbal->target_yaw - world_yaw);
+
+    /* ★★★ 目标角一阶平滑（治"调过去晃一下再回来"最有效的一条）--------------------
+       摇杆给的是【阶跃式】目标角：松杆那一刻 target_yaw 突然停住/拐弯，位置环看到的是
+       一个折角 -> 冲过头再由位置环拉回来。这里让 target_yaw 先过一个一阶低通，
+       位置环只追平滑后的值，折角被磨圆，过冲就没了。
+       系数按 τ 实时算（不写死魔数）：α = dt/(τ+dt)，dt = GIMBAL_DT_S = 1ms。
+       τ = tgt_smooth_ms（在线可调），tgt_smooth_ms = 0 -> α = 1（等价于关闭平滑）。
+       ★ 必须用 Gimbal_Wrap180 求差：target 与 smooth 分别在 ±180 两侧时，
+         直接相减会得到 ±360 的假误差，云台会朝反方向绕一整圈。
+       ★ 放在这里（而不是 target_yaw 赋值处）：视觉接管分支 / 摇杆分支 / 上电对齐
+         都会写 target_yaw，只有这一处能拿到【本拍最终】的目标角。 */
+    {
+        const float smooth_ms = gimbal->tgt_smooth_ms;
+
+        if (smooth_ms > 0.0f) {
+            const float alpha_s = GIMBAL_DT_S / (smooth_ms * 0.001f + GIMBAL_DT_S);
+
+            gimbal->target_yaw_smooth +=
+                alpha_s * Gimbal_Wrap180(gimbal->target_yaw - gimbal->target_yaw_smooth);
+            gimbal->target_yaw_smooth = Gimbal_Wrap180(gimbal->target_yaw_smooth);
+        } else {
+            gimbal->target_yaw_smooth = gimbal->target_yaw;   /* 关闭平滑：直通 */
+        }
+    }
+
+    /* ★ 位置环的输入用【平滑后】的目标角，不用 target_yaw（否则前面那段平滑等于白做）*/
+    float error = Gimbal_Wrap180(gimbal->target_yaw_smooth - world_yaw);
 
     /* ★ 死区：IMU 的 yaw 是纯陀螺积分、没有绝对参考，静止时会缓慢漂移。
        外环不设死区就会一直去追这个漂移，表现为"停着不动也慢慢抖/慢慢转"。
@@ -432,9 +465,11 @@ static void Gimbal_Update(void* arg) {
         error = 0.0f;
     }
 
-    /* 陀螺 yaw 角速度 deg/s -> RPM（/360*60 = /6），先一阶低通压噪声再进阻尼 */
+    /* 陀螺 yaw 角速度 deg/s -> RPM（/360*60 = /6），先一阶低通压噪声再进阻尼。
+       ★ alpha 走结构体字段（gimbal_world_da 可在线上改）：alpha 大 = 微分低通更"快"、
+         滞后更小、阻尼更早开始刹车；代价是陀螺噪声更多地进转速指令。 */
     const float gyro_rate_rpm = user_attitude.yaw_rate * (1.0f / 6.0f);
-    gimbal->yaw_rate_lpf += GIMBAL_WORLD_D_ALPHA * (gyro_rate_rpm - gimbal->yaw_rate_lpf);
+    gimbal->yaw_rate_lpf += gimbal->world_d_alpha * (gyro_rate_rpm - gimbal->yaw_rate_lpf);
 
     /* deg/s -> RPM（1 RPM = 6 deg/s）= 摇杆速率前馈 + 视觉自瞄角速度前馈。
        ★ 摇杆前馈乘"超喂"增益 stick_kf（>1 起步更利落，前馈不在反馈回路里，不影响稳定性）；

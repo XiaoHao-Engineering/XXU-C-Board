@@ -537,11 +537,32 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     /* 云台遥控通道：0=右手水平 1=右手垂直 2=左手水平 3=左手垂直 */
     {"gimbal_ch",   &user_gimbal.rc_ch, 0.0f, 3.0f, NULL},
     {"gimbal_max_w", &user_gimbal.max_w, 0.0f, 30.0f, NULL},
+    /* ---- ★★ 锁世界位置环（PD）+ 前馈 + 目标平滑：治"调过去晃一下再回来"的五个旋钮 ----
+       gimbal_world_kp   位置环 P：大 = 更硬更快、但过冲更大；小 = 稳但迟钝
+       gimbal_world_kd   陀螺阻尼 D：大 = 刹车更重、过冲更小；太大会发粘
+       gimbal_world_da   阻尼源低通 alpha(0~1)：大 = 微分滞后小、刹车更及时、噪声更大
+       gimbal_world_dead 位置死区 deg：压住静止漂移（只清 P 项）
+       gimbal_tgt_smooth 目标角一阶平滑 ms（0=关闭）：抹平阶跃目标，抑过冲最有效
+       gimbal_ff         底盘角速度前馈 0~1：1.0=运动学精确抵消；阶跃目标给满会冲过头
+       gimbal_rate_slew  摇杆速率限斜率 deg/s²：限制"前馈突然掉到 0"的冲击
+       ⚠️ 整定顺序：先 gimbal_world_kd / gimbal_tgt_smooth，再动 gimbal_world_kp。
+          ⚠️ gimbal_ki 必须保持 0（老 PID 无 dt + 整数转速反馈，开积分必静止震荡）*/
     {"gimbal_world_kp", &user_gimbal.world_kp, 0.0f, 50.0f, NULL},
-    {"gimbal_world_kd", &user_gimbal.world_kd, 0.0f, 2.0f, NULL},
+    {"gimbal_world_kd", &user_gimbal.world_kd, 0.0f, 5.0f, NULL},
+    /* ★ 阻尼源一阶低通系数：提高 = 微分滞后更小、阻尼更早起作用（噪声会稍大）。
+       默认 0.55。陀螺噪声明显（高频"沙沙"）就降到 0.45，然后把 gimbal_world_kd 补一点 */
+    {"gimbal_world_da", &user_gimbal.world_d_alpha, 0.0f, 1.0f, NULL},
     {"gimbal_world_dead", &user_gimbal.world_dead, 0.0f, 5.0f, NULL},
+    /* ★★★ 目标角一阶平滑时间常数 ms：治过冲最有效的一条，默认 25。
+       调大 = 目标更圆滑、过冲更小，但跟手更"慢半拍"；
+       调小（0~10） = 更跟手、过冲回来一些；填 0 = 完全关闭（退回改之前的行为，便于 A/B）。
+       ⚠️ 视觉跟快速移动目标觉得"跟不上"就把它调小，不要靠加 kp 去追 */
+    {"gimbal_tgt_smooth", &user_gimbal.tgt_smooth_ms, 0.0f, 200.0f, NULL},
     /* ★ 摇杆速率限斜率 deg/s²：治"转快了冲出去再回来"。太小跟手变钝，太大等于没加 */
     {"gimbal_rate_slew", &user_gimbal.rate_slew, 0.0f, 20000.0f, NULL},
+    /* ★ 底盘角速度前馈 0~1：1.0 = 运动学精确抵消底盘自转。
+       ⚠️ 摇杆是【阶跃式】目标，满前馈会在起步瞬间给速度环一个转速脉冲 -> 冲过头，
+          所以默认降到 0.4；跟踪匀速移动目标（视觉自瞄）时才需要调回 0.8~1.0 */
     {"gimbal_ff",  &user_gimbal.ff_gain, 0.0f, 1.0f, NULL},
     /* ★★ 摇杆速率前馈增益（跟手主旋钮）：1.0 = 运动学精确值；>1 略微超喂，起步更利落。
        前馈不在反馈回路里 -> 改它不影响稳定性，比加 gimbal_kp 安全。
