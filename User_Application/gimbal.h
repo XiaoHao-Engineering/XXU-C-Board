@@ -268,6 +268,20 @@
      对应绝对 119.1716°，均落在用户实测机械行程 78.2606° ~ 120.718° 之内。 */
 #define GIMBAL_PITCH_ABS_TO_JOINT_OFFSET  (90.5716f)
 
+/* ---- ★ 上电回位（boot homing）状态机参数（只在 GIMBAL_PITCH_BOOT_TO_FIXED=1 时生效）----
+   为什么需要状态机、而不是"首次对齐那一拍写一次目标角"：
+   原来 target_pitch 只在【首次对齐的那一拍】被赋成 9.1403，之后没有任何地方再声明它。
+   而 pitch 的首次对齐/重新对齐由"电机是否在线"驱动：上电初期 CAN 一抖动（>GIMBAL_OFFLINE_MS）
+   就会重新对齐一次，重新对齐走的是"掉线重连 → 保持原位"分支，会把 target_pitch 直接改成
+   当前角 —— 9.1403 就这样被永久覆盖，表现成"只有烧录后第一次上电会回位"。
+   现在改成：上电后第一次对齐就把 pitch_boot_homing 置 1，并【每个控制周期】重新写回目标角，
+   直到满足下面的退出条件之一才交回正常控制（达成/超时/人为动作）。
+   观测量：user_gimbal.pitch_boot_homing（1=还在回位）、user_gimbal.pitch_boot_homed（1=本次上电已结束回位）。 */
+#define GIMBAL_PITCH_BOOT_HOMING_TOL_DEG    (0.5f)   /* 到位判据 deg：|实际角 - 9.1403| 小于它算到位 */
+#define GIMBAL_PITCH_BOOT_HOMING_HOLD_MS    (120U)   /* 到位后要连续保持这么久才退出（防抖/防过冲时误判）*/
+#define GIMBAL_PITCH_BOOT_HOMING_TIMEOUT_MS (3000U)  /* 超时兜底 ms：堵转/机械卡死时不能永远霸占目标角。
+                                                        想让回位更"执着"就加大，想更早交权就减小 */
+
 /* 外环（角度环）：输入 deg，输出【转速目标 RPM】。用增强 PID（user_pid_adv），ki/kd 量纲带 s
    （ki = 输出/(误差·s)、kd = 输出/(误差/s)），数值比 user_pid 隐含 dt 的写法大，是正常的。 */
 #define GIMBAL_PITCH_ANGLE_KP       (12.0f)
@@ -426,6 +440,11 @@ typedef struct {
     uint8_t  pitch_is_aligned;             /* 1=已完成 pitch 角度标定 */
     uint32_t last_pitch_dbus_count;        /* 遥控帧计数 */
     uint16_t pitch_dbus_offline_ms;        /* 遥控断线累计 ms */
+    /* ---- 上电回位（boot homing）状态，见 gimbal.h 里 GIMBAL_PITCH_BOOT_HOMING_* ---- */
+    uint8_t  pitch_boot_homing;            /* 1=正在执行上电回位（此时 target_pitch 每拍被强制为 9.1403）*/
+    uint8_t  pitch_boot_homed;             /* 1=本次上电的回位已结束（到达/摇杆接管/视觉接管/超时），掉线重连不再回位 */
+    uint16_t pitch_homing_ms;              /* 回位已进行的时间 ms（超时判据，1kHz 下每拍 +1）*/
+    uint16_t pitch_homing_in_pos_ms;       /* 连续到位的时间 ms（到位判据的防抖计数）*/
 } GIMBAL_DRIVES;
 
 void  Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor);

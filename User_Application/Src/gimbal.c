@@ -148,6 +148,14 @@ void Gimbal_Pitch_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* pitch_motor) {
     gimbal->last_pitch_dbus_count = 0;
     gimbal->pitch_dbus_offline_ms = 0;
 
+    /* ★ 上电回位（boot homing）状态：每次上电（Gimbal_Pitch_Init 只在上电时调用一次）清零，
+       所以 pitch_boot_homed == 0 就是"本次上电还没回过位"，比 pitch_has_ever_online 可靠：
+       后者在第一帧反馈就被置 1，上电初期一掉线就会把回位目标覆盖成"保持原位"。 */
+    gimbal->pitch_boot_homing = 0;
+    gimbal->pitch_boot_homed = 0;
+    gimbal->pitch_homing_ms = 0;
+    gimbal->pitch_homing_in_pos_ms = 0;
+
     /* 外环：角度 deg -> 转速目标 RPM（增强 PID）*/
     PID_Adv_Init(&gimbal->pitch_pid_angle);
     PID_Adv_Set_DT(&gimbal->pitch_pid_angle, GIMBAL_DT_S);
@@ -527,13 +535,6 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
         return;
     }
 
-#if GIMBAL_PITCH_BOOT_TO_FIXED
-    /* ★ 本拍是【上电后第一次】对齐，还是掉线后的重连？pitch_has_ever_online 会在下面的
-       "本次在线"分支里被置 1，所以必须在掉线检测之前先快照。
-       只有上电后第一次对齐才驱到固定角；掉线重连必须保持原位（比赛中重连不许自己跑回去）。 */
-    const uint8_t first_align_after_boot = (gimbal->pitch_has_ever_online == 0);
-#endif
-
     /* 掉线检测：与 yaw 同一套逻辑 */
     if (motor->rx_count != gimbal->last_pitch_rx_count) {
         gimbal->last_pitch_rx_count = motor->rx_count;
@@ -570,7 +571,16 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
         DJI_Motor_Set_Angle_Here(motor, abs_deg_before - GIMBAL_PITCH_ABS_TO_JOINT_OFFSET);
         gimbal->pitch = DJI_Motor_Get_Angle(motor);
 #if GIMBAL_PITCH_BOOT_TO_FIXED
-        if (first_align_after_boot) {
+        /* ★★ 本次上电还没回过位 -> 进入/继续"上电回位"（由下面的状态机每拍强制目标角）。
+           ⚠️ 判据从原来的 first_align_after_boot（= pitch_has_ever_online==0 的快照）改成
+           pitch_boot_homed==0，这是"只有烧录后第一次上电会回位"的修复关键：
+             · pitch_has_ever_online 在第一帧反馈就被置 1（上面"本次在线"分支），而上电初期
+               CAN 只要抖一下超过 GIMBAL_OFFLINE_MS，pitch_is_aligned 就会被清掉、随后重新对齐；
+               那次重新对齐看到 pitch_has_ever_online==1，于是走 else 把 target_pitch 覆盖成
+               【当前角】—— 9.1403 的启动目标只写过一次，被覆盖后就再也没人写回来。
+             · pitch_boot_homed 只在【本次上电的回位真正结束】后才置 1（到位/超时/人为接管），
+               所以上电初期的掉线/重新对齐不会再取消回位，重连也继续回位到 9.1403。 */
+        if (gimbal->pitch_boot_homed == 0) {
             /* ★ 上电主动驱到固定关节角（用户要求"回到绝对编码器 99.7119°"= 关节角 9.1403°）。
                零点已按绝对角换算，所以这个目标与上电姿态无关。
                ⚠️ 安全：若上电位置离该角较远，位置环会在 GIMBAL_PITCH_ANGLE_MAX_OUT（200 RPM）
@@ -579,6 +589,10 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
             /* 安全检查：必须落在机械限位内，否则退回"保持原位"，避免撞限位 */
             if (gimbal->target_pitch > GIMBAL_PITCH_MAX_DEG) { gimbal->target_pitch = GIMBAL_PITCH_MAX_DEG; }
             if (gimbal->target_pitch < GIMBAL_PITCH_MIN_DEG) { gimbal->target_pitch = GIMBAL_PITCH_MIN_DEG; }
+            /* 进入/重启回位：计时清零（重新给 3s），到位防抖计数也清零 */
+            gimbal->pitch_boot_homing = 1;
+            gimbal->pitch_homing_ms = 0;
+            gimbal->pitch_homing_in_pos_ms = 0;
         } else {
             /* ★ 掉线重连/重新标定：保持当前位置，绝不自己跑回固定角 */
             gimbal->target_pitch = gimbal->pitch;
@@ -630,6 +644,51 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
         /* pitch_auto != 0 时目标角由上层（弹道解算）给，摇杆不参与，避免互相打架 */
         gimbal->target_pitch += stick * gimbal->pitch_max_w * GIMBAL_PITCH_RC_DIR * GIMBAL_DT_S;
     }
+
+#if GIMBAL_PITCH_BOOT_TO_FIXED
+    /* ★★ 上电回位（boot homing）状态机 ----------------------------------------------
+       位置：视觉/弹道/摇杆分支【之后】、软限位与下发【之前】。所以这一拍再没有任何分支能
+       在它之后改 target_pitch —— 回位期间目标角的写入优先级最高（摇杆积分、视觉目标、
+       弹道解算写的值都会被这一拍覆盖掉）。
+       退出条件（任一满足即交回正常控制，之后不再进入 homing）：
+         ① 到位：|实际角 - GIMBAL_PITCH_BOOT_TARGET_DEG| <= 0.5° 且连续保持 120ms；
+                  （保持是为了防"冲过头路过目标"被误判成到位）
+         ② 人为动作：摇杆出了死区（Gimbal_Stick 在死区内返回 0，所以 stick != 0 即"有意推杆"），
+                  或视觉自瞄已经接管 pitch —— 操作手/上层一要控制就立刻交权，绝不和用户抢；
+         ③ 超时 3s：堵转、机械卡住、目标进不去时不能永远霸占目标角。
+       ★ 与掉线重连的关系：回位【结束】才置 pitch_boot_homed=1，所以之后的重连保持原位
+         （与原来一致）；回位【进行中】遇到掉线则保持 pitch_boot_homing，重新对齐后继续回位，
+         不会因为上电初期一次 CAN 抖动就把回位取消掉。 */
+    if (gimbal->pitch_boot_homing) {
+        if (stick != 0.0f || gimbal->aim_takeover > 0.5f) {
+            /* ② 人为动作 / 视觉接管：立即交权。本拍上面分支写好的目标角保持不动 */
+            gimbal->pitch_boot_homing = 0;
+            gimbal->pitch_boot_homed = 1;
+        } else if (gimbal->pitch_homing_ms >= GIMBAL_PITCH_BOOT_HOMING_TIMEOUT_MS) {
+            /* ③ 超时兜底 */
+            gimbal->pitch_boot_homing = 0;
+            gimbal->pitch_boot_homed = 1;
+        } else {
+            gimbal->pitch_homing_ms++;      /* 本任务固定 1kHz，+1 = +1ms */
+            /* 强制目标角。9.1403 在软限位内，下面的软限位夹紧对它不起作用 */
+            gimbal->target_pitch = GIMBAL_PITCH_BOOT_TARGET_DEG;
+
+            /* ① 到位判定：实际角进带并保持住 -> 退出。目标角就留在 9.1403，交回正常控制 */
+            if (fabsf(gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG)
+                <= GIMBAL_PITCH_BOOT_HOMING_TOL_DEG) {
+                if (gimbal->pitch_homing_in_pos_ms < GIMBAL_PITCH_BOOT_HOMING_HOLD_MS) {
+                    gimbal->pitch_homing_in_pos_ms++;
+                }
+                if (gimbal->pitch_homing_in_pos_ms >= GIMBAL_PITCH_BOOT_HOMING_HOLD_MS) {
+                    gimbal->pitch_boot_homing = 0;
+                    gimbal->pitch_boot_homed = 1;
+                }
+            } else {
+                gimbal->pitch_homing_in_pos_ms = 0;
+            }
+        }
+    }
+#endif
 
     /* 软限位：夹住目标角；目标固定后误差不再增大、积分也不再涨，等于顺带做了抗积分饱和。
        ★ 自瞄目标在闸门里已经用同一对 MIN/MAX（留 1° 余量）判过有效性，这里是最终夹紧 */
