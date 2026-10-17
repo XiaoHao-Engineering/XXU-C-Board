@@ -527,6 +527,13 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
         return;
     }
 
+#if GIMBAL_PITCH_BOOT_TO_FIXED
+    /* ★ 本拍是【上电后第一次】对齐，还是掉线后的重连？pitch_has_ever_online 会在下面的
+       "本次在线"分支里被置 1，所以必须在掉线检测之前先快照。
+       只有上电后第一次对齐才驱到固定角；掉线重连必须保持原位（比赛中重连不许自己跑回去）。 */
+    const uint8_t first_align_after_boot = (gimbal->pitch_has_ever_online == 0);
+#endif
+
     /* 掉线检测：与 yaw 同一套逻辑 */
     if (motor->rx_count != gimbal->last_pitch_rx_count) {
         gimbal->last_pitch_rx_count = motor->rx_count;
@@ -546,15 +553,39 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
     gimbal->pitch_speed = DJI_Motor_Get_Speed(motor);
     gimbal->pitch_current = DJI_Motor_Get_Current(motor);
 
-    /* ★ 首次角度标定：收到第一帧后把【当前位置】定义成 GIMBAL_PITCH_ZERO_BIAS_DEG，此后
-       Get_Angle() 返回的才是真实俯仰角，软限位才落在正确角度上（标定这一拍不下发指令）。 */
+    /* ★ 首次角度标定：收到第一帧后把【当前绝对单圈角】换算成关节角零点
+       （关节角 = 绝对角 - GIMBAL_PITCH_ABS_TO_JOINT_OFFSET），此后 Get_Angle() 返回的就是
+       绝对姿态对应的关节角，软限位也落在绝对行程上（标定这一拍不下发指令）。 */
     if (!gimbal->pitch_is_aligned) {
         if (!gimbal->pitch_is_online) {
             return;
         }
-        DJI_Motor_Set_Angle_Here(motor, GIMBAL_PITCH_ZERO_BIAS_DEG);
+        /* ★ 用【绝对单圈编码器】换算关节零点（关节角 = 绝对角 - 90.5716），
+           这样 target_pitch = 9.1403° 永远等于绝对 99.7119°，与上电姿态无关。
+           ⚠️ 必须在 Set_Angle_Here 之前读 rotor_angle：它会改 total_angle/零点。
+           GM6020 反馈里的 rotor_angle 是 0~8191 的单圈计数 -> 0~360°（与 chassis_control.c
+           的 Chassis_Encoder_SingleTurn_Deg 同一换算；那个函数是 static，不能跨文件调用）。
+           注：Set_Angle_Here 内部按 8192 计数（≈0.0439°）量化零点，误差 < 1 个计数。 */
+        const float abs_deg_before = (float)motor->rotor_angle / 8192.0f * 360.0f;
+        DJI_Motor_Set_Angle_Here(motor, abs_deg_before - GIMBAL_PITCH_ABS_TO_JOINT_OFFSET);
         gimbal->pitch = DJI_Motor_Get_Angle(motor);
+#if GIMBAL_PITCH_BOOT_TO_FIXED
+        if (first_align_after_boot) {
+            /* ★ 上电主动驱到固定关节角（用户要求"回到绝对编码器 99.7119°"= 关节角 9.1403°）。
+               零点已按绝对角换算，所以这个目标与上电姿态无关。
+               ⚠️ 安全：若上电位置离该角较远，位置环会在 GIMBAL_PITCH_ANGLE_MAX_OUT（200 RPM）
+                  限幅内直接转过去 —— 第一次测试请【手扶枪管】或确认行程内无障碍。 */
+            gimbal->target_pitch = GIMBAL_PITCH_BOOT_TARGET_DEG;
+            /* 安全检查：必须落在机械限位内，否则退回"保持原位"，避免撞限位 */
+            if (gimbal->target_pitch > GIMBAL_PITCH_MAX_DEG) { gimbal->target_pitch = GIMBAL_PITCH_MAX_DEG; }
+            if (gimbal->target_pitch < GIMBAL_PITCH_MIN_DEG) { gimbal->target_pitch = GIMBAL_PITCH_MIN_DEG; }
+        } else {
+            /* ★ 掉线重连/重新标定：保持当前位置，绝不自己跑回固定角 */
+            gimbal->target_pitch = gimbal->pitch;
+        }
+#else
         gimbal->target_pitch = gimbal->pitch;
+#endif
         gimbal->pitch_is_aligned = 1;
         return;
     }
