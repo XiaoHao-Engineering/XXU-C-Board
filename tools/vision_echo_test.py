@@ -73,10 +73,12 @@ PC 假视觉 —— 四元数回环实验（yaw / pitch 的符号与数值对比
         USB-TTL-B：接 MCU USART6，跑串口绘图 —— ★ 要发 `yaw_auto=1#` 让云台接管，
                    这个命令走 USART6 下行，所以【B 的 TX 必须接到 MCU 的 USART6_RX】，
                    否则命令根本到不了板子，云台永远不跟（只发一次，或重上电后再发）。
-    ★ 怎么看拟合（串口绘图现在【只有一个固定模式】，6 通道，没有 plot_mode 了：
+    ★ 怎么看拟合（串口绘图现在【只有一个固定模式】，7 通道，没有 plot_mode 了：
         ch1 yaw 单圈绝对角 / ch2 yaw 相对角 / ch3 pitch 单圈绝对角 / ch4 pitch 相对角 /
-        ch5 遥控目标 YAW / ch6 遥控目标 PITCH。下面 1)~5) 里说的"实际角"
-        就是 ch2 (yaw_enc_rel) 和 ch4 (pitch_enc_rel)，目标角用本脚本打印的数值对照）
+        ch5 遥控目标 YAW / ch6 遥控目标 PITCH / ch7 位置环实际 yaw 反馈（yaw_fb）。
+        下面 1)~5) 里说的"实际角"就是 ch2 (yaw_enc_rel) 和 ch4 (pitch_enc_rel)，
+        目标角用本脚本打印的数值对照；要看【真实 yaw 跟随误差】用 ch7 - ch5
+        （两者同在世界系；ch2 是编码器相对角，和 ch5 不是一个坐标系））
         1) 滞后：实际角（my_yaw/my_pitch）比目标角晚一点点是正常的（控制延迟）；
            频率越高滞后越明显。两条曲线的过零点时间差 ÷ 周期 × 360° 就是相位滞后。
         2) 幅值衰减：实际曲线的峰-峰值应该 ≈ 目标峰-峰值的 2×amp；明显变小说明
@@ -602,9 +604,10 @@ def main():
         print('  接线：USB-TTL-A 接 USART1（RX<-MCU_TX、TX->MCU_RX、必须共地）；')
         print('        串口绘图用 USB-TTL-B 接 USART6，★ B 的 TX 必须接到 MCU 的 USART6_RX，')
         print('        否则 yaw_auto=1# 这条下行命令到不了板子，云台永远不会跟。')
-        print('  判据：串口绘图（固定单模式 6 通道）里把 ch2 yaw_enc_rel / ch4 pitch_enc_rel')
+        print('  判据：串口绘图（固定单模式 7 通道）里把 ch2 yaw_enc_rel / ch4 pitch_enc_rel')
         print('        和本脚本打印的目标角对照看：滞后多少 / 幅值是否衰减 / 有没有静差 / '
-              '有没有反号。')
+              '有没有反号；')
+        print('        要看 yaw【真实跟随误差】就用 ch7 yaw_fb 减 ch5 target_yaw（同在世界系）。')
         if args.mode == 0:
             print('  ⚠️ 当前 mode=0：电控【不会】用这份数据控制云台（只验链路）；'
                   '要看跟随请加 --mode 1。')
@@ -822,9 +825,10 @@ def main():
         print('     ⚠️ 这条命令走 USART6 下行 —— 串口绘图那个 USB-TTL 的 TX 必须接到 MCU 的')
         print('        USART6_RX，否则命令根本到不了板子，云台不会跟（发一次就行，'
               '重上电要再发一次）。')
-        print('  2) 打开串口绘图（现在只有一个固定模式，6 通道，【不用】再发 plot_mode 了）：')
-        print('     SerialPlot 里设 Frame Start AB / #Channels 6 / Frame Size 24；')
+        print('  2) 打开串口绘图（现在只有一个固定模式，7 通道，【不用】再发 plot_mode 了）：')
+        print('     SerialPlot 里设 Frame Start AB / #Channels 7 / Frame Size 28；')
         print('     或 tools/serialplot.py COMx。')
+        print('     第 7 通道 yaw_fb 是位置环实际用的 yaw 反馈（世界系），ch7-ch5 就是真实误差。')
         print('  3) 对照看两条实际角：ch2 yaw_enc_rel 与 ch4 pitch_enc_rel，'
               '重点看滞后多少、幅值有没有衰减、')
         print('     有没有静差、有没有反号（配合本脚本打印的目标角数值）。')

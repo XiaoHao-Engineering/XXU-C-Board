@@ -83,6 +83,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     Waveform_Init(&user_wave, GIMBAL_DT_S);
     Gimbal_Wave_Apply();
     gimbal->imu_yaw = 0.0f;
+    gimbal->yaw_fb   = 0.0f;      /* 位置环实际反馈镜像（串口绘图 ch7）*/
     gimbal->target_speed = 0.0f;
 
     PID_Init(&gimbal->yaw_pid, GIMBAL_YAW_KP, GIMBAL_YAW_KI, GIMBAL_YAW_KD,
@@ -429,6 +430,14 @@ static void Gimbal_Update(void* arg) {
     /* IMU 装在底盘上：云台世界朝向 = 底盘世界朝向 + 云台相对底盘的编码器角 */
     const float world_yaw = Gimbal_Wrap180(gimbal->imu_yaw + gimbal->yaw);
 #endif
+
+    /* ★ 串口绘图 ch7：把位置环【本拍实际使用】的 yaw 反馈镜像出去（只读，不参与控制）。
+       直接用 world_yaw 这个变量，就是为了保证"画出来的"和"位置环用的"是同一个值、
+       同一种算法（含 bias_accum 扣除），不会各算一遍再对不上。
+       ★ 它和 ch5 target_yaw / 平滑后的 target_yaw_smooth 都在【世界系】，
+         ch7 - ch5 = 真实跟随误差；ch2 的编码器相对角是另一个坐标系，不能这样相减。
+       ★ 单位 deg，±180；对齐前（未进位置环）保持上次值/初值 0。 */
+    gimbal->yaw_fb = world_yaw;
 
     /* ★★★ 目标角一阶平滑（治"调过去晃一下再回来"最有效的一条）--------------------
        摇杆给的是【阶跃式】目标角：松杆那一刻 target_yaw 突然停住/拐弯，位置环看到的是

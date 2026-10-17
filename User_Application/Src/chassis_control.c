@@ -39,7 +39,7 @@ static uint8_t        s_prev_sw1 = 0;
 static Chassis_HeadingSource s_heading_src = ChassisControl_NoHeading;
 static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
 
-/* ==================== 串口绘图：只有一个固定模式（6 通道）====================
+/* ==================== 串口绘图：只有一个固定模式（7 通道）====================
  *
  * ★ 上电即这个模式，没有模式切换、没有 plot_mode 命令（原来的 case 0~10 已全部删除）。
  *
@@ -48,16 +48,22 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
  *   ch2  yaw_enc_rel     YAW【相对角】              度  ±180    对齐后累计角 user_gimbal.yaw
  *   ch3  pitch_enc_abs   pitch 电机【单圈绝对角】   度  0~360   GM6020 13 位绝对编码器
  *   ch4  pitch_enc_rel   pitch【相对角】            度  ±180    user_gimbal.pitch
- *   ch5  target_yaw      遥控器发的【目标 YAW】     度  ±180    user_gimbal.target_yaw
+ *   ch5  target_yaw      遥控器发的【目标 YAW】     度  ±180    user_gimbal.target_yaw（世界系）
  *   ch6  target_pitch    遥控器发的【目标 PITCH】   度          user_gimbal.target_pitch
+ *   ch7  yaw_fb          位置环实际用的 yaw 反馈    度  ±180    user_gimbal.yaw_fb
+ *                       = imu_yaw − bias_accum（世界系，位置环的同一个 world_yaw）
+ *
+ * ★★ ch7 是新增的"真实跟随误差"通道：ch5(target_yaw) 与 ch7(yaw_fb) 都在【世界系】，
+ *    ch7 - ch5 = 真实跟随误差（含零偏扣除后的真值）。原来只能看 ch5 和 ch2，
+ *    而 ch2 是【编码器相对角】，和世界系目标不同坐标系，直接相减是错的。
  *
  * ★★ SerialPlot（hyOzd 那个 Qt 上位机）里必须这样设，填错就画不出来：
  *      Frame Start = AB
- *      #Channels   = 6
- *      Frame Size  = 24            <-- 6 通道 × 4 字节（float32），不是 26！
+ *      #Channels   = 7
+ *      Frame Size  = 28            <-- 7 通道 × 4 字节（float32），不是 30！
  *      Number Type = float（32 位）/ Little Endian
  *      Checksum    = 累加和（Sum，在通道数据之后）
- *    线上实际帧长 = 1(帧头) + 24(数据) + 1(校验和) = 26 字节。
+ *    线上实际帧长 = 1(帧头) + 28(数据) + 1(校验和) = 30 字节。
  *    ★ 通道数 / Frame Size 与固件不一致的典型症状：串口"有数据在跑"，
  *      但 SerialPlot 显示 0sps + Checksum failed，曲线完全不动 —— 帧长对不上，
  *      永远同步不到帧头（这次"跑不起来"的根因就是这个：固件原默认模式 9 是
@@ -68,7 +74,7 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
  *     相邻字段的字节 -> 解出 NaN / 1e38 -> SerialPlot 画不出线。
  *     GM6020 的单圈绝对角原始量 rotor_angle 是 uint16_t（0~8191 计数），
  *     所以下面用 s_yaw_encoder_abs / s_pitch_encoder_abs 两个 float 镜像。
- *     同理，通道数必须与实参个数完全一致（6 个），否则 data_num 与指针数不符。
+ *     同理，通道数必须与实参个数完全一致（7 个），否则 data_num 与指针数不符。
  * ========================================================================== */
 
 /* 单圈绝对角用的编码器分辨率：13 位 = 一圈 8192 个计数（不是 8191）。
@@ -131,8 +137,8 @@ static void Chassis_Apply_Friction_Gain(void) {
 
 /* ★ 这里【绝对不能】再调 Serialplot_Set_Data()：
    原来 case 6 里塞了一段 8 通道的绘图登记（当时想借用通道号做快捷切换），
-   后果是——只要有谁把通道号设成 6 就会把已登记好的固定 6 通道覆盖成 8 通道，
-   帧长从 26 变成 34 字节，上位机立刻全部 Checksum failed。已删除。
+   后果是——只要有谁把通道号设成 6 就会把已登记好的固定通道覆盖成 8 通道，
+   帧长跟着变长（当时从 26 变成 34 字节），上位机立刻全部 Checksum failed。已删除。
    绘图通道现在只在 Chassis_Apply_Plot_Mode() 里登记一次。 */
 static int16_t RC_Channel(const uint8_t ch) {
     switch (ch) {
@@ -208,20 +214,23 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
     return (float)motor->rotor_angle / PLOT_ENCODER_CPR * 360.0f;
 }
 
-/* 登记本帧要上报的 6 个通道。
+/* 登记本帧要上报的 7 个通道。
    ★ 单模式：上电就这一套，没有任何模式切换、没有 plot_mode 命令。
-   ★ 通道顺序 / 含义 / 单位 / 上位机设置见本文件顶部的说明块（42~72 行）。
+   ★ 通道顺序 / 含义 / 单位 / 上位机设置见本文件顶部的说明块（42~76 行）。
    ★ 这里只允许出现【float 变量】的地址：Serialplot_Set_Data() 按 sizeof(float)
      逐 4 字节 memcpy，传非 float 的地址会读到相邻字段的字节 -> NaN / 1e38。
-   ★ 通道数 6 必须与实参个数 6 完全一致（多写/少写都会让 data_num 与指针数不符）。*/
+   ★ 通道数 7 必须与实参个数 7 完全一致（多写/少写都会让 data_num 与指针数不符）。
+   ★ 前 6 个通道【顺序和内容都不能动】：用户的上位机已经按那 6 个配好了，
+     新通道只能【追加在末尾】。*/
 static void Chassis_Apply_Plot_Mode(void) {
-    Serialplot_Set_Data(&user_serialplot, 6,
+    Serialplot_Set_Data(&user_serialplot, 7,
                         &s_yaw_encoder_abs,        /* ch1 YAW 单圈绝对角    度 0~360 */
                         &user_gimbal.yaw,          /* ch2 YAW 相对角        度 ±180  */
                         &s_pitch_encoder_abs,      /* ch3 pitch 单圈绝对角  度 0~360 */
                         &user_gimbal.pitch,        /* ch4 pitch 相对角      度 ±180  */
                         &user_gimbal.target_yaw,   /* ch5 遥控目标 YAW      度 ±180  */
-                        &user_gimbal.target_pitch);/* ch6 遥控目标 PITCH    度       */
+                        &user_gimbal.target_pitch, /* ch6 遥控目标 PITCH    度       */
+                        &user_gimbal.yaw_fb);      /* ch7 位置环 yaw 反馈   度 ±180  */
 }
 
 void ChassisControl_Init(Chassis* chassis, DBUS_DRIVES* dbus) {
@@ -395,7 +404,7 @@ void ChassisControl_JScopeCallback(void* arg) {
 /* ---- 在线调参变量表 ---- */
 
 static const SERIALPLOT_VAR chassis_tunable[] = {
-    /* ★ 串口绘图现在只有一个固定模式（6 通道），原来的 plot_mode 项已删除，
+    /* ★ 串口绘图现在只有一个固定模式（7 通道），原来的 plot_mode 项已删除，
        没有在线切换、也没有 plot_mode 命令。通道定义见 Chassis_Apply_Plot_Mode()。*/
     {"test_wheel", &s_test_wheel, -4.0f, 4.0f,   NULL},
     {"test_rpm",   &s_test_rpm,    0.0f, 3000.0f, NULL},

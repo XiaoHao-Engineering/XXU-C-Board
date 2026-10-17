@@ -352,6 +352,11 @@ typedef struct {
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */
     uint16_t dbus_offline_ms;      /* 遥控断线累计 ms */
     float imu_yaw;                 /* IMU 实测的云台世界朝向 deg（观察用）*/
+    /* ★ 串口绘图 ch7：位置环【实际使用】的 yaw 反馈，= imu_yaw − bias_accum，单位 deg。
+       只读镜像（在 gimbal.c 里紧跟 world_yaw 赋值），不参与任何控制运算。
+       它和 target_yaw / target_yaw_smooth 同属【世界系】，两者相减才是真实跟随误差；
+       ch2 的 yaw 是编码器【相对角】（另一个坐标系），不能直接拿来算误差。 */
+    float yaw_fb;
     float target_speed;            /* 目标转子转速 RPM（观察用）*/
     SysTick_Task task;
 

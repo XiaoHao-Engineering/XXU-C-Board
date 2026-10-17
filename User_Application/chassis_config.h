@@ -86,15 +86,16 @@
 
 /* 串口绘图通道选择 --------------------------------------------------------*/
 /* ★★ 串口绘图现在【只有一个固定模式】，上电即生效，没有模式切换、没有 plot_mode 命令。
-   6 个通道（从上到下，顺序不可改）：
+   7 个通道（从上到下，顺序不可改）：
      ch1  yaw_enc_abs    YAW 电机单圈绝对角     度 0~360
      ch2  yaw_enc_rel    YAW 相对角             度 ±180
      ch3  pitch_enc_abs  pitch 电机单圈绝对角   度 0~360
      ch4  pitch_enc_rel  pitch 相对角           度 ±180
      ch5  target_yaw     遥控器发的目标 YAW     度 ±180
      ch6  target_pitch   遥控器发的目标 PITCH   度
-   SerialPlot 里必须设：Frame Start=AB / #Channels=6 / Frame Size=24（6×4）
-   另一端的开关（SERIALPLOT_CHECKSUM_ENABLE=1）决定线上帧长 26 字节。
+     ch7  yaw_fb         位置环实际用的 yaw 反馈 度 ±180（= imu_yaw - bias_accum）
+   SerialPlot 里必须设：Frame Start=AB / #Channels=7 / Frame Size=28（7×4）
+   另一端的开关（SERIALPLOT_CHECKSUM_ENABLE=1）决定线上帧长 30 字节。
    通道定义在 chassis_control.c 的 Chassis_Apply_Plot_Mode()；
    原来的 CHASSIS_SERIALPLOT_MODE 宏（多模式默认值）已随多模式一起删除。 */
 

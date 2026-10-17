@@ -13,7 +13,7 @@
     注意: 如果你用的是 SerialPlot（hyOzd 那个 Qt 上位机），本脚本用不上，
           直接按 docs/上机调试流程.md 的"SerialPlot 配置"一节填参数即可。
 
-★ 固件只有【一个固定绘图模式】：6 通道，上电即生效。
+★ 固件只有【一个固定绘图模式】：7 通道，上电即生效。
   没有模式切换，也没有 plot_mode 命令（第 2 个命令行参数只是为了兼容老习惯，
   现在只有 0 一个模式，填别的会直接提示不用填）。
   通道（从上到下，顺序不能改）:
@@ -23,10 +23,11 @@
     ch4  pitch_enc_rel   pitch【相对角】           度 ±180
     ch5  target_yaw      遥控器发的【目标 YAW】    度 ±180
     ch6  target_pitch    遥控器发的【目标 PITCH】  度
-  线上帧长 = 1(帧头 0xAB) + 24(6 x float32) + 1(累加和) = 26 字节。
+    ch7  yaw_fb          位置环实际用的 yaw 反馈   度 ±180  = imu_yaw - bias_accum
+  线上帧长 = 1(帧头 0xAB) + 28(7 x float32) + 1(累加和) = 30 字节。
 
-  ★ 用 SerialPlot（hyOzd）时填：Frame Start AB / #Channels 6 / Frame Size 24
-    （Frame Size 是【数据字节数】= 6 x 4 = 24，不含帧头和校验和，填 26 是错的）
+  ★ 用 SerialPlot（hyOzd）时填：Frame Start AB / #Channels 7 / Frame Size 28
+    （Frame Size 是【数据字节数】= 7 x 4 = 28，不含帧头和校验和，填 30 是错的）
 
 注意（C 板）: 串口绘图走 USART6，CubeMX 里配的是 115200（和 A 板一致）。
               要是以后把 USART6 提到 921600 提高刷新率，
@@ -54,10 +55,10 @@ HEADER   = 0xAB
 BAUD     = 115200       # 和固件 USART6 的波特率一致
 MAX_PTS  = 500          # 每条曲线保留的点数
 
-# 通道名 —— 固件只有【这一个】固定模式（6 通道），上电即生效，没有模式切换。
+# 通道名 —— 固件只有【这一个】固定模式（7 通道），上电即生效，没有模式切换。
 # ★ 必须和固件 User_Application/Src/chassis_control.c 里
 #   Chassis_Apply_Plot_Mode() 的顺序一一对应，不能错位。
-#   协议帧长 = 1(帧头 AB) + 24(6 x float32) + 1(累加和) = 26 字节。
+#   协议帧长 = 1(帧头 AB) + 28(7 x float32) + 1(累加和) = 30 字节。
 #
 #   ch1  yaw_enc_abs     YAW 电机【单圈绝对角】     度 0~360  GM6020 13 位绝对编码器
 #   ch2  yaw_enc_rel     YAW【相对角】              度 +-180   对齐后的累计角（user_gimbal.yaw）
@@ -65,16 +66,20 @@ MAX_PTS  = 500          # 每条曲线保留的点数
 #   ch4  pitch_enc_rel   pitch【相对角】            度 +-180   （user_gimbal.pitch）
 #   ch5  target_yaw      遥控器发的【目标 YAW】     度 +-180   （user_gimbal.target_yaw）
 #   ch6  target_pitch    遥控器发的【目标 PITCH】   度         （user_gimbal.target_pitch）
+#   ch7  yaw_fb          位置环实际用的 yaw 反馈    度 +-180   （user_gimbal.yaw_fb）
+#                       = imu_yaw - bias_accum，【世界系】，和 ch5 同一坐标系
 #
 #   ★ 判据：拨右摇杆左右 -> ch5 目标 YAW 变、ch2/ch4（相对角）跟着走；
 #     绝对角 ch1/ch3 只在 0~360 之间循环（过零点会从 360 跳回 0，不是坏数据）。
-#   ★ SerialPlot（hyOzd）里必须设：Frame Start AB / #Channels 6 / Frame Size 24。
+#   ★ 真实跟随误差 == ch7 - ch5（两者同在世界系）。
+#     ch2 是编码器相对角、另一个坐标系，不能和 ch5 直接相减。
+#   ★ SerialPlot（hyOzd）里必须设：Frame Start AB / #Channels 7 / Frame Size 28。
 MODE_NAMES = {
     0: ["yaw_enc_abs", "yaw_enc_rel", "pitch_enc_abs",
-        "pitch_enc_rel", "target_yaw", "target_pitch"],
+        "pitch_enc_rel", "target_yaw", "target_pitch", "yaw_fb"],
 }
 
-DEFAULT_MODE = 0        # 固件只有一个固定模式（6 通道），这个 0 只是个占位键
+DEFAULT_MODE = 0        # 固件只有一个固定模式（7 通道），这个 0 只是个占位键
 
 # 当前使用的通道名（main() 里按模式重新赋值）
 NAMES = list(MODE_NAMES[DEFAULT_MODE])
@@ -281,10 +286,10 @@ class App:
 def main():
     global NAMES
 
-    # 固件只有【一个固定模式】（6 通道），所以第 2 个参数只是为了兼容老命令：
+    # 固件只有【一个固定模式】（7 通道），所以第 2 个参数只是为了兼容老命令：
     # 传 0 或不传都行，传别的直接提示"不用填"并退出（免得按错的通道数解析）。
     if len(sys.argv) > 2 and str(sys.argv[2]).strip() not in ("", "0", "DEFAULT", "default"):
-        print("串口绘图现在【只有一个固定模式】（6 通道 / Frame Size 24），不用再传模式号；"
+        print("串口绘图现在【只有一个固定模式】（7 通道 / Frame Size 28），不用再传模式号；"
               "收到 %r。直接 python tools/serialplot.py COM4 即可。" % sys.argv[2])
         sys.exit(1)
     mode = DEFAULT_MODE

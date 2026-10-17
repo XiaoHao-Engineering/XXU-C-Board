@@ -254,10 +254,10 @@ cmake --build build --parallel
 帧尾校验和由 `user_serialplot.h` 的 `SERIALPLOT_CHECKSUM_ENABLE` 控制（默认 1）。
 自带的 `tools/serialplot.py` 会自动识别带不带校验和。
 
-### 绘图模式：只有一个（固定 6 通道）
+### 绘图模式：只有一个（固定 7 通道）
 
 **上电即这一套，没有模式切换、也没有 `plot_mode` 命令了**（原来的 case 0~10 已删除）。
-SerialPlot 里必须设 **Frame Start `AB` / #Channels `6` / Frame Size `24`**，
+SerialPlot 里必须设 **Frame Start `AB` / #Channels `7` / Frame Size `28`**，
 **Frame Size 填错就是"串口有数据但在跑不起来"（0sps + Checksum failed）**。
 
 | 通道 | 名字 | 含义 | 单位 |
@@ -268,9 +268,12 @@ SerialPlot 里必须设 **Frame Start `AB` / #Channels `6` / Frame Size `24`**�
 | 4 | `pitch_enc_rel` | pitch **相对角**（`user_gimbal.pitch`）| 度 ±180 |
 | 5 | `target_yaw` | 遥控器发的**目标 YAW** | 度 ±180 |
 | 6 | `target_pitch` | 遥控器发的**目标 PITCH** | 度 |
+| 7 | `yaw_fb` | **位置环实际用的 yaw 反馈**（`user_gimbal.yaw_fb` = `imu_yaw - bias_accum`）| 度 ±180 |
 
 > ★ 绝对角是**绝对编码器**读数：上电停在哪就读到哪，掉电不丢，**过零点会从 360 跳回 0**（不是坏数据）。
 > ★ 相对角是"上电对齐 + 累计"的角度，跨 ±180 会跳变。
+> ★ **ch7 用来算真实跟随误差**：ch7 和 ch5 同在**世界系**，`ch7 - ch5` 才是位置环真正在压的那个误差；
+>   ch2 是编码器相对角，和世界系目标不是一个坐标系，不能直接跟 ch5 相减。
 > ★ 原来那些按模块划分的调试视图（四元数 / 视觉收发包镜像 / 射击排错 …）已随多模式一起删除；
 > 要查视觉链路用 `tools/vision_rx_test.py` / `tools/vision_echo_test.py`，
 > 要查 CAN 收帧用 RTT 或临时加通道。
@@ -381,7 +384,7 @@ v0_k=0.004#  v0_b=4.0#                       弹速模型（必须实测标定�
 - 从 A 板移植到 C 板；新增云台 pitch（GM6020 ID4 @CAN2，串级 + 增强 PID）、
   射击机构（2×M3508 + 1×M2006 @CAN2，状态机 + FIR）、弹道解算（牛顿迭代）
 - 电机底层加固：首帧编码器基准保护、掉线保护、按电调型号区分电流满量程、过温降额
-- 串口绘图 V1 时可运行时切换模式（`plot_mode`）；**V2.3 起精简为单一固定模式（6 通道，
+- 串口绘图 V1 时可运行时切换模式（`plot_mode`）；**V2.3 起精简为单一固定模式（7 通道，
   无 `plot_mode`）**，因为多模式 + 上位机通道数不同步正是"串口有数据但画不出图"的根因；
   CMSIS-DSP 只编译 7 个文件（644→89 编译单元）；栈 1KB→2KB、堆 512B→1KB；开机音乐加总时长上限
 
