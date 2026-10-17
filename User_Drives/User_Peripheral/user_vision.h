@@ -143,6 +143,8 @@ typedef struct {
     float    target_pitch_deg;     /* = target_pitch × VISION_PKG2DEG（度）*/
     float    target_yaw_vel_deg;   /* = target_yaw_vel   × VISION_PKG2DEG（度/秒）*/
     float    target_pitch_vel_deg; /* = target_pitch_vel × VISION_PKG2DEG（度/秒）*/
+    float    target_yaw_acc_deg;   /* = target_yaw_acc   × VISION_PKG2DEG（弧度 -> 度/秒²）*/
+    float    target_pitch_acc_deg; /* = target_pitch_acc × VISION_PKG2DEG（弧度 -> 度/秒²）*/
     float    online_f;             /* is_online 的 float 镜像（1=在线 0=离线）*/
     float    crc_error_f;          /* crc_error_count 的 float 镜像（累计 CRC 坏帧数）*/
 

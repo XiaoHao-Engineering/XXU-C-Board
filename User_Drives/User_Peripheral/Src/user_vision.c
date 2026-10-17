@@ -83,6 +83,8 @@ void Vision_Init(VISION_DRIVES* vision, UART_DRIVES* uart) {
     vision->target_pitch_deg = 0.0f;
     vision->target_yaw_vel_deg = 0.0f;
     vision->target_pitch_vel_deg = 0.0f;
+    vision->target_yaw_acc_deg = 0.0f;
+    vision->target_pitch_acc_deg = 0.0f;
     vision->online_f = 0.0f;
     vision->frame_count_f = 0.0f;
     vision->crc_error_f = 0.0f;
@@ -158,6 +160,8 @@ static void Vision_Handle(void* user_uart) {
             vision->target_pitch_deg = vision->target_pitch * VISION_PKG2DEG;
             vision->target_yaw_vel_deg = vision->target_yaw_vel * VISION_PKG2DEG;
             vision->target_pitch_vel_deg = vision->target_pitch_vel * VISION_PKG2DEG;
+            vision->target_yaw_acc_deg = vision->target_yaw_acc * VISION_PKG2DEG;
+            vision->target_pitch_acc_deg = vision->target_pitch_acc * VISION_PKG2DEG;
             vision->online_f = (float)vision->is_online;
             vision->frame_count_f = (float)vision->frame_count;
             vision->crc_error_f = (float)vision->crc_error_count;

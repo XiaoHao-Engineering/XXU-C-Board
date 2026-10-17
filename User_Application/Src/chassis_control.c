@@ -44,18 +44,21 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
  * ★ 上电即这个模式，没有模式切换、没有 plot_mode 命令（原来的 case 0~10 已全部删除）。
  *
  * 通道顺序（从上到下，不能改；SerialPlot 里的通道号就是它）：
- *   ch1  yaw_enc_abs     YAW 电机【单圈绝对角】     度  0~360   GM6020 13 位绝对编码器
- *   ch2  yaw_enc_rel     YAW【相对角】              度  ±180    对齐后累计角 user_gimbal.yaw
- *   ch3  pitch_enc_abs   pitch 电机【单圈绝对角】   度  0~360   GM6020 13 位绝对编码器
- *   ch4  pitch_enc_rel   pitch【相对角】            度  ±180    user_gimbal.pitch
- *   ch5  target_yaw      遥控器发的【目标 YAW】     度  ±180    user_gimbal.target_yaw（世界系）
- *   ch6  target_pitch    遥控器发的【目标 PITCH】   度          user_gimbal.target_pitch
- *   ch7  yaw_fb          位置环实际用的 yaw 反馈    度  ±180    user_gimbal.yaw_fb
- *                       = imu_yaw − bias_accum（世界系，位置环的同一个 world_yaw）
+ *   ch1  target_yaw_deg        视觉目标 YAW 角度        度        user_vision.target_yaw_deg
+ *   ch2  target_yaw_vel_deg    视觉目标 YAW 角速度      度/秒     user_vision.target_yaw_vel_deg
+ *   ch3  target_yaw_acc_deg    视觉目标 YAW 角加速度    度/秒²    user_vision.target_yaw_acc_deg
+ *   ch4  target_pitch_deg      视觉目标 PITCH 角度      度        user_vision.target_pitch_deg
+ *   ch5  target_pitch_vel_deg  视觉目标 PITCH 角速度    度/秒     user_vision.target_pitch_vel_deg
+ *   ch6  target_pitch_acc_deg  视觉目标 PITCH 角加速度  度/秒²    user_vision.target_pitch_acc_deg
+ *   ch7  yaw_fb                位置环实际用的 yaw 反馈  度        user_gimbal.yaw_fb
+ *                              = imu_yaw − bias_accum（世界系，位置环的同一个 world_yaw）
  *
- * ★★ ch7 是新增的"真实跟随误差"通道：ch5(target_yaw) 与 ch7(yaw_fb) 都在【世界系】，
- *    ch7 - ch5 = 真实跟随误差（含零偏扣除后的真值）。原来只能看 ch5 和 ch2，
- *    而 ch2 是【编码器相对角】，和世界系目标不同坐标系，直接相减是错的。
+ * ★ ch1~ch6 就是视觉通过 USART1 发过来的 6 个数，顺序完全一致（yaw 角、yaw 角速度、
+ *   yaw 角加速度、pitch 角、pitch 角速度、pitch 角加速度）。视觉包内是【弧度】，
+ *   user_vision.c 收帧时已统一 ×VISION_PKG2DEG 写入 _deg 镜像，所以这里画出来是【度】制。
+ *
+ * ★ ch1(视觉目标 yaw) 与 ch7(世界系 yaw 反馈) 同在世界系，二者之差可当作 yaw 跟随
+ *   误差观察（前提是视觉与 IMU 的零偏已对齐）。
  *
  * ★★ SerialPlot（hyOzd 那个 Qt 上位机）里必须这样设，填错就画不出来：
  *      Frame Start = AB
@@ -66,15 +69,14 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
  *    线上实际帧长 = 1(帧头) + 28(数据) + 1(校验和) = 30 字节。
  *    ★ 通道数 / Frame Size 与固件不一致的典型症状：串口"有数据在跑"，
  *      但 SerialPlot 显示 0sps + Checksum failed，曲线完全不动 —— 帧长对不上，
- *      永远同步不到帧头（这次"跑不起来"的根因就是这个：固件原默认模式 9 是
- *      8 通道/34 字节，上位机却按 5 通道/20 字节配的）。
+ *      永远同步不到帧头。
  *
  * ★★★ 这里【只允许传 float 变量的地址】：Serialplot_Set_Data() 内部对每个指针
  *     按 sizeof(float)=4 做 memcpy，传 uint16_t / uint8_t / int32_t 的地址会读到
  *     相邻字段的字节 -> 解出 NaN / 1e38 -> SerialPlot 画不出线。
- *     GM6020 的单圈绝对角原始量 rotor_angle 是 uint16_t（0~8191 计数），
- *     所以下面用 s_yaw_encoder_abs / s_pitch_encoder_abs 两个 float 镜像。
  *     同理，通道数必须与实参个数完全一致（7 个），否则 data_num 与指针数不符。
+ *     （s_yaw_encoder_abs / s_pitch_encoder_abs 两个 float 镜像仍保留并更新，
+ *       只是当前不再是绘图通道，以后要用可以直接加回。）
  * ========================================================================== */
 
 /* 单圈绝对角用的编码器分辨率：13 位 = 一圈 8192 个计数（不是 8191）。
@@ -216,21 +218,21 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
 
 /* 登记本帧要上报的 7 个通道。
    ★ 单模式：上电就这一套，没有任何模式切换、没有 plot_mode 命令。
-   ★ 通道顺序 / 含义 / 单位 / 上位机设置见本文件顶部的说明块（42~76 行）。
-   ★ 这里只允许出现【float 变量】的地址：Serialplot_Set_Data() 按 sizeof(float)
+   ★ 通道顺序 / 含义 / 单位 / 上位机设置见本文件顶部的说明块。
+   ★ 只许传【float 变量】的地址：Serialplot_Set_Data() 按 sizeof(float)
      逐 4 字节 memcpy，传非 float 的地址会读到相邻字段的字节 -> NaN / 1e38。
-   ★ 通道数 7 必须与实参个数 7 完全一致（多写/少写都会让 data_num 与指针数不符）。
-   ★ 前 6 个通道【顺序和内容都不能动】：用户的上位机已经按那 6 个配好了，
-     新通道只能【追加在末尾】。*/
+   ★ 通道数必须与实参个数一致（7）；上位机固定 Frame Start=AB / #Channels=7 /
+     Frame Size=28（线上 1 + 7×4 + 1 = 30 字节）。
+   ★ ch1~ch6 = 视觉发的 6 个数（已换算成度），ch7 = yaw 控制反馈。*/
 static void Chassis_Apply_Plot_Mode(void) {
     Serialplot_Set_Data(&user_serialplot, 7,
-                        &s_yaw_encoder_abs,        /* ch1 YAW 单圈绝对角    度 0~360 */
-                        &user_gimbal.yaw,          /* ch2 YAW 相对角        度 ±180  */
-                        &s_pitch_encoder_abs,      /* ch3 pitch 单圈绝对角  度 0~360 */
-                        &user_gimbal.pitch,        /* ch4 pitch 相对角      度 ±180  */
-                        &user_gimbal.target_yaw,   /* ch5 遥控目标 YAW      度 ±180  */
-                        &user_gimbal.target_pitch, /* ch6 遥控目标 PITCH    度       */
-                        &user_gimbal.yaw_fb);      /* ch7 位置环 yaw 反馈   度 ±180  */
+                        &user_vision.target_yaw_deg,        /* ch1 视觉 yaw 角度        度       */
+                        &user_vision.target_yaw_vel_deg,    /* ch2 视觉 yaw 角速度      度/秒    */
+                        &user_vision.target_yaw_acc_deg,    /* ch3 视觉 yaw 角加速度    度/秒²   */
+                        &user_vision.target_pitch_deg,      /* ch4 视觉 pitch 角度      度       */
+                        &user_vision.target_pitch_vel_deg,  /* ch5 视觉 pitch 角速度    度/秒    */
+                        &user_vision.target_pitch_acc_deg,  /* ch6 视觉 pitch 角加速度  度/秒²   */
+                        &user_gimbal.yaw_fb);               /* ch7 yaw 控制反馈（位置环实际用的世界角）度 */
 }
 
 void ChassisControl_Init(Chassis* chassis, DBUS_DRIVES* dbus) {
