@@ -25,7 +25,10 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->yaw = 0.0f;
     gimbal->target_yaw = 0.0f;
     gimbal->target_yaw_smooth = 0.0f;   /* 上电时平滑值与目标角一致（真正对齐在后面 target_yaw = imu_yaw 处）*/
-    gimbal->tgt_smooth_ms = GIMBAL_TGT_SMOOTH_MS;   /* 目标角平滑时间常数 ms，0 = 关闭平滑 */
+    /* ★ 目标角平滑分两套（按 aim_takeover 二选一，见 Gimbal_Update 里算 alpha_s 那一段）：
+       摇杆/无目标用 RC（小=跟手），自瞄接管用 AIM（大=不抖），两个都可在线上改。 */
+    gimbal->tgt_smooth_ms     = GIMBAL_TGT_SMOOTH_RC_MS;   /* 摇杆：gimbal_tgt_smooth */
+    gimbal->tgt_smooth_aim_ms = GIMBAL_TGT_SMOOTH_AIM_MS;  /* 自瞄：gimbal_aim_smooth */
     gimbal->last_rx_count = 0;
     gimbal->offline_ms = 0;
     gimbal->is_online = 0;
@@ -476,13 +479,19 @@ static void Gimbal_Update(void* arg) {
        一个折角 -> 冲过头再由位置环拉回来。这里让 target_yaw 先过一个一阶低通，
        位置环只追平滑后的值，折角被磨圆，过冲就没了。
        系数按 τ 实时算（不写死魔数）：α = dt/(τ+dt)，dt = GIMBAL_DT_S = 1ms。
-       τ = tgt_smooth_ms（在线可调），tgt_smooth_ms = 0 -> α = 1（等价于关闭平滑）。
+       τ 分两套、按 aim_takeover 选：摇杆 tgt_smooth_ms(12ms) / 自瞄 tgt_smooth_aim_ms(40ms)，
+       两者都可在线上改；填 0 -> α = 1（等价于关闭平滑）。
        ★ 必须用 Gimbal_Wrap180 求差：target 与 smooth 分别在 ±180 两侧时，
          直接相减会得到 ±360 的假误差，云台会朝反方向绕一整圈。
        ★ 放在这里（而不是 target_yaw 赋值处）：视觉接管分支 / 摇杆分支 / 上电对齐
          都会写 target_yaw，只有这一处能拿到【本拍最终】的目标角。 */
     {
-        const float smooth_ms = gimbal->tgt_smooth_ms;
+        /* ★ 分模式（用户要求）：摇杆要快（12ms，跟手）、自瞄要稳（40ms，不抖）。
+           aim_takeover 在 Gimbal_Aim_Update 里本拍已更新（本函数之前调用），读到的就是最新值。
+           两个时间常数都保留在线可调：gimbal_tgt_smooth = RC，gimbal_aim_smooth = AIM。 */
+        const float smooth_ms = (gimbal->aim_takeover > 0.5f)
+                              ? gimbal->tgt_smooth_aim_ms
+                              : gimbal->tgt_smooth_ms;
 
         if (smooth_ms > 0.0f) {
             const float alpha_s = GIMBAL_DT_S / (smooth_ms * 0.001f + GIMBAL_DT_S);
@@ -720,6 +729,19 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
          调用唯一实现 Gimbal_Clamp_Pitch_Target()，与外部写入点共用同一份限位逻辑。 */
     Gimbal_Clamp_Pitch_Target(gimbal);
 
+    /* ★★ 目标速度前馈 KF 分模式（用户要求：摇杆要有前馈/跟手，自瞄不要前馈/别抖）----------
+       摇杆给的目标角是【连续斜坡】（每 1ms += rate*dt），KF 把目标角速度前馈进外环，
+       消掉"先攒误差才有转速"的滞后 -> 推杆跟手；
+       视觉接管时目标角是【每帧阶跃刷新】的（~100Hz），KF 对"目标角差分"会每帧打一个
+       尖峰（fout = kf × Δtarget / 1ms），表现就是 pitch 跟着每一帧抖一下 —— 所以接管时置 0，
+       真正需要的目标角速度由视觉通过 ff_ext 单独给（aim_ff_pitch，默认也是 0）。
+       ⚠️ PID_Adv_Set_K_F 的实现就是 pid->kf = kf; （user_pid_adv.c:235），纯字段写、
+          无副作用、无额外开销，放在 1kHz 周期里每拍写一次没问题。
+       ⚠️ 唯一副作用：在线命令 pitch_ang_kf 改的值会在下一拍被这里覆盖，等于失效；
+          现在要改摇杆 KF 请改宏 GIMBAL_PITCH_ANGLE_KF 后重新烧录。 */
+    PID_Adv_Set_K_F(&gimbal->pitch_pid_angle,
+                    (gimbal->aim_takeover > 0.5f) ? 0.0f : GIMBAL_PITCH_ANGLE_KF);
+
     /* ★★ 视觉角速度前馈 -> 【速度环目标】--------------------------------------------
        参考工程走的是 Motor_Pitch.Set_Feedforward_Omega(0.6 × 视觉角速度)
        （ita_robot.cpp:727/731）。本工程 pitch 是【外环角度(deg->RPM) + 内环速度(RPM->电流)】
@@ -727,8 +749,8 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
        加到外环输出上（PID_Adv 的 ff_ext）就等价于"叠加到速度环的目标上"。
        ⚠️ 摇杆模式必须写回 0，否则会一直带着上一次自瞄的残留前馈。
        ⚠️ 外环自带的 pitch_ang_kf 是把【目标角差分】当目标速度用的；视觉每帧是阶跃更新，
-          会因此产生一个每帧一次的脉冲。若实测"每帧顶一下"，把 pitch_ang_kf 在线调到 0
-          （真正的目标角速度已经由视觉通过 ff_ext 提供了）。 */
+          会因此产生一个每帧一次的脉冲 —— 这个问题已由上面"自瞄接管时把 KF 置 0"解决；
+          真正的目标角速度由视觉通过 ff_ext 提供（aim_ff_pitch，默认 0）。 */
     PID_Adv_Set_Feedforward(&gimbal->pitch_pid_angle,
                             (gimbal->aim_takeover > 0.5f)
                             ? (gimbal->pitch_aim_rate * (1.0f / 6.0f)) : 0.0f);

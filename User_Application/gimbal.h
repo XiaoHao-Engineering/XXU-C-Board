@@ -188,8 +188,18 @@
 
    ★ 副作用（都是想要的）：视觉接管/切回摇杆那一瞬间的"阶跃式目标切换"也会被磨圆，
      所以接管瞬间不会甩一下；代价是目标本身快速移动时云台会"慢半个 τ"，
-     视觉跟快速移动目标觉得跟不上就把这个值调小（0~10ms）。在线调 gimbal_tgt_smooth。 */
- #define GIMBAL_TGT_SMOOTH_MS    (25.0f)  /* 折中：自瞄需要 40、摇杆 12 更好；先取 25。正解是拆成摇杆/自瞄两套 */
+     视觉跟快速移动目标觉得跟不上就把这个值调小（0~10ms）。在线调 gimbal_tgt_smooth。
+
+   ★★ 分模式（用户要求：摇杆要快、自瞄要稳）：拆成两套时间常数，运行时按
+      gimbal->aim_takeover 自动二选一（见 gimbal.c 算 alpha_s 那一段）：
+        · aim_takeover == 0（摇杆 / 没识别到装甲板 / 视觉未接管）-> RC  = 12ms（小 = 跟手）
+        · aim_takeover != 0（识别到装甲板、自瞄接管）            -> AIM = 40ms（大 = 不抖）
+      ⚠️ 两套都保留在线可调：gimbal_tgt_smooth 改【摇杆】那套，gimbal_aim_smooth 改【自瞄】那套。
+         （结构体字段名 tgt_smooth_ms 现在表示"摇杆值"，保留是为了不破坏已有的串口命令。） */
+#define GIMBAL_TGT_SMOOTH_RC_MS   (12.0f)   /* 摇杆/无目标时：小=跟手 */
+#define GIMBAL_TGT_SMOOTH_AIM_MS  (40.0f)   /* 自瞄接管时：大=不抖 */
+/* 兼容旧引用：= 摇杆值；运行时不再直接用这个宏（按 aim_takeover 二选一） */
+#define GIMBAL_TGT_SMOOTH_MS      GIMBAL_TGT_SMOOTH_RC_MS
 
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
@@ -349,7 +359,8 @@ typedef struct {
        不直接用 target_yaw。加它的原因和 τ 的取法见 gimbal.h 里 GIMBAL_TGT_SMOOTH_MS。
        ⚠️ 跟踪它必须用 Wrap180 求差，否则跨 ±180° 会绕一整圈（见 gimbal.c）*/
     float target_yaw_smooth;
-    float tgt_smooth_ms;           /* 目标角平滑时间常数 ms，可在线改（0=关闭平滑）*/
+    float tgt_smooth_ms;           /* 目标角平滑 τ ms【摇杆/无目标时用】，在线改 gimbal_tgt_smooth（0=关闭）*/
+    float tgt_smooth_aim_ms;       /* 目标角平滑 τ ms【自瞄接管时用】，在线改 gimbal_aim_smooth（大=不抖）*/
     float angle_raw;               /* 电机多圈角度 deg（观察用）*/
     float speed;                   /* 电机转速 RPM（观察用）*/
     float rc_ch;                   /* 遥控通道 0~3，可在线改 */

@@ -450,6 +450,9 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
        调小（0~10） = 更跟手、过冲回来一些；填 0 = 完全关闭（退回改之前的行为，便于 A/B）。
        ⚠️ 视觉跟快速移动目标觉得"跟不上"就把它调小，不要靠加 kp 去追 */
     {"gimbal_tgt_smooth", &user_gimbal.tgt_smooth_ms, 0.0f, 200.0f, NULL},
+    /* ★ 自瞄接管时用的目标角平滑 ms（大 = 稳、不抖）。上面那条现在只管【摇杆/无目标】时；
+       两条按 gimbal->aim_takeover 自动二选一（见 gimbal.c），不用手动切换 */
+    {"gimbal_aim_smooth", &user_gimbal.tgt_smooth_aim_ms, 0.0f, 200.0f, NULL},
     /* ★ 摇杆速率限斜率 deg/s²：治"转快了冲出去再回来"。太小跟手变钝，太大等于没加 */
     {"gimbal_rate_slew", &user_gimbal.rate_slew, 0.0f, 20000.0f, NULL},
     /* ★ 底盘角速度前馈 0~1：1.0 = 运动学精确抵消底盘自转。
