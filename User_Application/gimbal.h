@@ -189,7 +189,7 @@
    ★ 副作用（都是想要的）：视觉接管/切回摇杆那一瞬间的"阶跃式目标切换"也会被磨圆，
      所以接管瞬间不会甩一下；代价是目标本身快速移动时云台会"慢半个 τ"，
      视觉跟快速移动目标觉得跟不上就把这个值调小（0~10ms）。在线调 gimbal_tgt_smooth。 */
-#define GIMBAL_TGT_SMOOTH_MS    (40.0f)  /* ★ 实测 40ms 才不抖(视觉数据抖)。注意: 摇杆也走这条平滑，会略钝；以后可拆成"摇杆/自瞄"两套 */
+ #define GIMBAL_TGT_SMOOTH_MS    (25.0f)  /* 折中：自瞄需要 40、摇杆 12 更好；先取 25。正解是拆成摇杆/自瞄两套 */
 
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
@@ -293,7 +293,7 @@
    KF 把【目标的角速度】直接前馈进去，滞后直接归零（理论上 KF = 1/6 ≈ 0.167 就把
    "deg/s 的目标速率" 精确换算成 "RPM 的输出"，因为 1RPM = 6deg/s）。
    ⚠️ 前馈不参与死区，所以小推杆也会立刻动 —— 死区只影响 P 项，响应不再被死区拖慢。 */
-#define GIMBAL_PITCH_ANGLE_KF       (0.0f)   /* ★ 目标微分前馈关掉：视觉目标跳变时会产生尖峰，导致 pitch 抖 */
+ #define GIMBAL_PITCH_ANGLE_KF       (0.167f) /* ★ 恢复！这是【摇杆目标】的微分前馈(让推杆更跟手)，不是视觉前馈。之前误设 0 导致 pitch 推杆发飘。★ 视觉路径的跳变尖峰要靠 aim_takeover 时旁路它来解决(见 gimbal.c) */
 #define GIMBAL_PITCH_ANGLE_MAX_OUT  (200.0f)  /* 外环输出上限 = 内环转速目标上限 RPM */
 #define GIMBAL_PITCH_ANGLE_MAX_IOUT (60.0f)
 #define GIMBAL_PITCH_ANGLE_MAX_DOUT (60.0f)
