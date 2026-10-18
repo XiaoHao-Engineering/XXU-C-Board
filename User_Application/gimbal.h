@@ -90,7 +90,7 @@
      闸⑤ 跳变门限     —— 与上一帧【有效】目标角的差 > 本阈值 = 单帧野值，本帧拒。
      闸⑥ 连续无效计数 —— 连续 GIMBAL_AIM_INVALID_LIMIT 帧都被拒 -> 退出接管、回摇杆。
    单位都是【度】（工程内部单位）。拒绝时【绝不写】目标角，继续用上一帧的有效值。 */
-#define GIMBAL_AIM_MAX_ERR_DEG       (120.0f)  /* 闸③：目标与当前世界角的偏差上限 */
+ #define GIMBAL_AIM_MAX_ERR_DEG       (45.0f)   /* ★ 实测调整：原120度时目标在侧后方也会立刻全力转过去(猛甩)。改45度：只接管近处目标，远处要自己手动转过去，进入45度后自动接管 */
 #define GIMBAL_AIM_JUMP_DEG          (60.0f)   /* 闸⑤：单帧目标角跳变门限 */
 #define GIMBAL_AIM_PITCH_MARGIN_DEG  (1.0f)    /* 闸④：pitch 有效性判据比软限位松 1° */
 #define GIMBAL_AIM_INVALID_LIMIT     (5U)      /* 闸⑥：连续多少帧被拒就退出接管 */
