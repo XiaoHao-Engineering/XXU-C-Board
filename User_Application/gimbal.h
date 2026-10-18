@@ -67,8 +67,8 @@
    ita_robot.cpp:644/727  feedforward = 系数 × 视觉目标角速度
    ⚠️ 它们只是"用视觉角速度的百分之多少去喂速度环"的无量纲系数（前馈不在反馈回路里，
       改它不影响稳定性，只影响跟踪移动目标时的滞后/超调）。在线可调：aim_ff_gain / aim_ff_pitch */
-#define GIMBAL_AIM_FF_GAIN_YAW   (0.5f)
-#define GIMBAL_AIM_FF_GAIN_PITCH (0.6f)
+#define GIMBAL_AIM_FF_GAIN_YAW   (0.0f)   /* ★ 实测(2026-10-17)关掉才不抖：视觉角速度噪声大(±16deg/s)，开0.5会把噪声灌进速度环。要打提前量只能在线 0.1/0.2 小步加 */
+#define GIMBAL_AIM_FF_GAIN_PITCH (0.0f)   /* ★ 同上，pitch 视觉速度前馈关掉；之前 0.6 导致 pitch 电机嗡嗡震 */
 /* 兼容旧名：原来只有一个 GIMBAL_AIM_FF_GAIN(1.0)，语义就是 yaw 的角速度前馈系数 */
 #define GIMBAL_AIM_FF_GAIN       (GIMBAL_AIM_FF_GAIN_YAW)
 #define GIMBAL_AIM_DELAY_MS     (20.0f)    /* 链路延迟估计 ms，需实测（先给 20）*/
@@ -189,7 +189,7 @@
    ★ 副作用（都是想要的）：视觉接管/切回摇杆那一瞬间的"阶跃式目标切换"也会被磨圆，
      所以接管瞬间不会甩一下；代价是目标本身快速移动时云台会"慢半个 τ"，
      视觉跟快速移动目标觉得跟不上就把这个值调小（0~10ms）。在线调 gimbal_tgt_smooth。 */
-#define GIMBAL_TGT_SMOOTH_MS    (12.0f)  /* ★ 实测有效(2026-10-17)：25->12 后滞后更小、整体更贴合；代价是峰值有 ~1.5° 轻微过冲，靠 GIMBAL_WORLD_KD 补阻尼。0=关闭平滑 */
+#define GIMBAL_TGT_SMOOTH_MS    (40.0f)  /* ★ 实测 40ms 才不抖(视觉数据抖)。注意: 摇杆也走这条平滑，会略钝；以后可拆成"摇杆/自瞄"两套 */
 
 /* ★★ IMU 装在哪：1 = 装在云台上（imu_yaw 就是云台世界朝向，直接用）
                   0 = 装在底盘上（云台世界朝向 = 底盘 yaw + 云台相对底盘的编码器角）
@@ -293,7 +293,7 @@
    KF 把【目标的角速度】直接前馈进去，滞后直接归零（理论上 KF = 1/6 ≈ 0.167 就把
    "deg/s 的目标速率" 精确换算成 "RPM 的输出"，因为 1RPM = 6deg/s）。
    ⚠️ 前馈不参与死区，所以小推杆也会立刻动 —— 死区只影响 P 项，响应不再被死区拖慢。 */
-#define GIMBAL_PITCH_ANGLE_KF       (0.167f)
+#define GIMBAL_PITCH_ANGLE_KF       (0.0f)   /* ★ 目标微分前馈关掉：视觉目标跳变时会产生尖峰，导致 pitch 抖 */
 #define GIMBAL_PITCH_ANGLE_MAX_OUT  (200.0f)  /* 外环输出上限 = 内环转速目标上限 RPM */
 #define GIMBAL_PITCH_ANGLE_MAX_IOUT (60.0f)
 #define GIMBAL_PITCH_ANGLE_MAX_DOUT (60.0f)
