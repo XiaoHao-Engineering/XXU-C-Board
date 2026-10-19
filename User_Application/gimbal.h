@@ -10,10 +10,7 @@
 
 /* 云台 yaw 配置 */
 /* 锁世界方向（用 Rotor_speed 模式，见 main.c）：推杆 = 世界系里恒速转，松杆 = 锁当前方向、
-   推开自动回位；底盘自转靠前馈抵消，云台不跟底盘转。
-   ★ 2026-10-19 重构：位置环反馈改成【编码器关节角 + 世界基准常数 yaw_world_ref】，
-     不再用 IMU 积分角（积分角会漂）。IMU 只在首次对齐时定一次基准 + 自瞄稳定时做极慢视觉修正；
-     底盘转动靠 rate 前馈（GIMBAL_FF_GAIN）抵消。详见 GIMBAL_YAW_REF_TRIM_* 那一段。*/
+   推开自动回位；底盘自转靠前馈抵消，云台不跟底盘转。反馈用板载 IMU 的 yaw（A 板装在 yaw 上）。*/
 #define GIMBAL_LOCK_WORLD       (1)      /* 0=退回纯速度控制（IMU 有问题时用）*/
 
 #define GIMBAL_YAW_MOTOR_ID     (1)          /* GM6020 的 CAN ID (1~7) */
@@ -98,16 +95,19 @@
 #define GIMBAL_AIM_PITCH_MARGIN_DEG  (1.0f)    /* 闸④：pitch 有效性判据比软限位松 1° */
 #define GIMBAL_AIM_INVALID_LIMIT     (5U)      /* 闸⑥：连续多少帧被拒就退出接管 */
 
-/* ★★★ 陀螺零偏在线跟踪 —— 保留，但【已不参与位置环】(2026-10-19) ----------------
-   重构后 yaw 位置环反馈 = 编码器关节角 + yaw_world_ref（编码器不漂），
-   所以零偏不需要再从快速环里减掉。本段现在只服务一个地方：
-     掉线重连 / 重新对齐时，基准 = imu_yaw - bias_accum - yaw，需要 bias_accum
-     把 IMU 积分角里已经累积的零偏扣掉，基准才能和真实世界角对齐。
-   机制（不变）：摇杆居中 + 编码器说云台没动 -> 真实角速度≈0 -> 测到的 yaw_rate 就是零偏
-     -> 低通成零偏估计 yaw_bias，累积成 bias_accum（只增不减的角量）。
-   ⚠️ 门控必须同时满足"摇杆居中"和"编码器没动"，否则真实的慢速转动会被当成零偏吃掉。
-   ⚠️ bias_accum 不再出现在位置环的每拍计算里（见 gimbal.c 位置环）。
-   在线仍可调 gimbal_bias_k（填 0 = 关闭，便于 A/B 对比）。 */
+/* ★★★ 陀螺零偏在线跟踪 —— 根治"摇杆不动时每 5~6 秒飘一次"-----------------
+   机理：IMU 的 yaw 是【纯陀螺积分、没有绝对参考】，零偏（实测约 0.05deg/s）会让 imu_yaw
+   自己缓慢漂移；位置环为了把 imu_yaw 钉在固定目标上，就必须让云台【物理上】以同样速率
+   反向爬行 —— 那个周期性小修正就是这么来的。死区只能把它量化成"隔几秒跳一下"，治不了根；
+   而"把目标挪过去跟着漂"更糟：云台会跟着一起漂。
+
+   ★ 正确做法是【把零偏从反馈里减掉】：
+     摇杆居中 + 编码器说云台没动  ->  真实角速度≈0  ->  此时测到的 yaw_rate 就是零偏
+       ->  低通成零偏估计 yaw_bias，累积成 bias_accum
+       ->  位置反馈改用 (imu_yaw - bias_accum)
+     反馈量不再漂，位置环就不用再爬，云台才能真正停住；同时位置环保持满刚度，
+     死区也就可以缩到 0.05（顺带治"到位后轻轻飘"）。
+   ⚠️ 门控必须同时满足"摇杆居中"和"编码器没动"，否则真实的慢速转动会被当成零偏吃掉。 */
 #define GIMBAL_BIAS_TRACK_ALPHA     (0.0002f)  /* 零偏估计一阶低通：α=dt/τ，1kHz 下 τ=5s。
                                                   在线调 gimbal_bias_k（填 0 = 关闭，便于 A/B 对比）*/
 #define GIMBAL_BIAS_ENC_MAX_RATE    (0.5f)     /* 认为"没动"的编码器角速度阈值 deg/s。
@@ -158,43 +158,16 @@
 
 /* 修正量限幅 RPM —— ★ 只夹【位置修正部分】，摇杆前馈在限幅之后再相加（见 gimbal.c）。
    原来 60 太小：满杆前馈本身就 57 RPM，等于把阻尼余量挤没了 -> 冲一下再回来。
-   它的职责只是拦住跨 ±180° 的一脚踹和编码器异常，150 RPM 足够宽松又仍能兜底。 */
+   它的职责只是拦住跨 ±180° 的一脚踹和 IMU 异常，150 RPM 足够宽松又仍能兜底。 */
 #define GIMBAL_WORLD_MAX_RPM    (150.0f)
 
-/* ★★ 外环死区 deg —— 压住静止时编码器量化噪声 / 静摩擦造成的轻微抖动。
-   ★ 反馈改成编码器后不再有"陀螺积分漂移"，这里的职责从"追漂移"变成"压量化噪声"：
-     只清 P 项（阻尼与前馈仍保留），死区内云台真正静止。
-     pitch 外环早就有同样的死区（pitch_ang_dz），yaw 这里保持一致。
-     0.02~0.2 都合适；调太大跟踪会有静差。在线调 gimbal_world_dead */
+/* ★★ 外环死区 deg —— 这是"停着不动也慢慢抖"的关键一条：
+   本工程 IMU 的 yaw 是【纯陀螺积分、没有绝对参考】（互补滤波只融合了 pitch），
+   静止时 yaw 会缓慢漂移；外环去追这个漂移，就表现为静止时慢慢抖/慢慢转。
+   死区内把角度误差清零（阻尼与前馈仍然保留），静止就真的静止。
+   pitch 外环早就有同样的死区（pitch_ang_dz），yaw 这里补上以保持一致。
+   0.2~0.5 都合适；调太大跟踪会有静差。在线调 gimbal_world_dead */
 #define GIMBAL_WORLD_DEAD_DEG   (0.05f)
-
-/* ★★★ yaw 位置环反馈 = 编码器关节角 + 世界基准常数（2026-10-19 重构）---------------
-   历史问题：旧反馈 world_yaw = imu_yaw - bias_accum 是【陀螺积分角】，没有绝对参考，
-   长时间必然漂（实测约 0.05deg/s）；pitch 用编码器相对角，所以 pitch 不漂。
-   新反馈：
-       world_fb = Gimbal_Wrap180(gimbal->yaw + gimbal->yaw_world_ref)
-     · gimbal->yaw       = 编码器关节角（±180 wrap，来自 Gimbal_Get_Yaw，快且不漂）
-     · yaw_world_ref     = 上电/首次对齐时用 IMU 世界角定一次的【常数】基准 deg
-   IMU 积分角从此完全退出快速环，只在两处出现：①对齐时定基准 ②下面的视觉慢修正。
-   代价（结构性的）：编码器看不到底盘转动，底盘自转必须靠 rate 前馈抵消 ——
-     gimbal.c 位置环里的 -user_chassis.omega * RAD_S_TO_RPM * ff_gain 那一项
-     （GIMBAL_FF_GAIN = 1.0，已接入）。rate 是"角速度"，不积分 -> 不会漂。 */
-/* 世界基准的视觉慢修正：只在【自瞄稳定锁定】时，用极慢一阶积分把基准往"误差归零"修。
-   条件（全部连续满足 GIMBAL_YAW_REF_TRIM_SETTLE_MS 才动手）：
-     aim_takeover > 0.5 + 视觉本帧有效 + |目标角速度估计| 很小 + |误差| 很小。
-   摇杆控制 / 没有视觉 / 目标在动 / 大误差暂态 -> 一律不修，基准保持不变。
-   积分：yaw_world_ref += K * error * dt（dt = 1ms），
-         单拍再夹 ±MAX_STEP_DEG，累计（相对本次对齐基准）夹 ±RANGE_DEG。
-   全部可在线调：gimbal_ref_trim / _k / _step / _range / _settle / _err / _tgt_rate / _rate_a。
-   ⚠️ K 的量纲是 1/s，闭环时间常数约 1/K（K=0.5 -> 约 2s），不是滤波器 τ。 */
-#define GIMBAL_YAW_REF_TRIM_ENABLE       (1)       /* 1=允许慢修正（在线 gimbal_ref_trim=0 可关）*/
-#define GIMBAL_YAW_REF_TRIM_K            (0.5f)    /* 1/s：0.5~2；默认 0.5 最保守，在线 gimbal_ref_k */
-#define GIMBAL_YAW_REF_TRIM_MAX_STEP_DEG (0.01f)   /* 每次（1ms）最多修 0.01deg = 10deg/s 兜底 */
-#define GIMBAL_YAW_REF_TRIM_RANGE_DEG    (15.0f)   /* 相对对齐基准的累计修正上限 deg（双向）*/
-#define GIMBAL_YAW_REF_TRIM_SETTLE_MS    (500U)    /* 条件连续满足多久才允许修 ms */
-#define GIMBAL_YAW_REF_TRIM_MAX_ERR_DEG  (3.0f)    /* 只在 |误差| <= 它（=已稳定锁定）时修 deg */
-#define GIMBAL_YAW_REF_TRIM_MAX_TGT_RATE (5.0f)    /* 目标角速度估计超过它就判"目标在动"，停修 deg/s */
-#define GIMBAL_YAW_REF_TRIM_RATE_ALPHA   (0.1f)    /* 目标角速度估计的一阶低通（每个视觉帧）*/
 
 /* ★★★ 目标角一阶平滑（时间常数 ms）—— 治"调过去晃一下再回来"最有效的一条。
    ---------------------------------------------------------------------------
@@ -224,7 +197,7 @@
       ⚠️ 两套都保留在线可调：gimbal_tgt_smooth 改【摇杆】那套，gimbal_aim_smooth 改【自瞄】那套。
          （结构体字段名 tgt_smooth_ms 现在表示"摇杆值"，保留是为了不破坏已有的串口命令。） */
 #define GIMBAL_TGT_SMOOTH_RC_MS   (12.0f)   /* 摇杆/无目标时：小=跟手 */
- #define GIMBAL_TGT_SMOOTH_AIM_MS  (12.0f)   /* ★ 实测(2026-10-19)：40ms 响应太慢，12ms 明显变快且不抖(前馈已关，抖源已消除)；自瞄接管时用它 */
+ #define GIMBAL_TGT_SMOOTH_AIM_MS  (12.0f)   /* ★ 实测(2026-10-19)：40ms 响应太慢，12ms 明显变快且不抖(前馈已关，抖源已消除) */
 /* 兼容旧引用：= 摇杆值；运行时不再直接用这个宏（按 aim_takeover 二选一） */
 #define GIMBAL_TGT_SMOOTH_MS      GIMBAL_TGT_SMOOTH_RC_MS
 
@@ -233,10 +206,7 @@
    ✅ 本车已确认 = 1：C 板装在 yaw 与 pitch 的连接处（相当于"头部"），
       所以板载 BMI088 的 yaw 就是云台的世界朝向，imu_yaw 可直接当云台世界角用。
       ⚠️ 换车/挪板子必须重新确认，填错会让锁世界锁错对象（云台跟着底盘转）。
-      判定法：① 固定底盘、手动转云台，看串口 gimu/yaw 变不变；② 固定云台、手动转底盘，再看。
-   ★ 2026-10-19 起 yaw 位置环【不再】每拍用 imu_yaw 做积分反馈（改为编码器 + yaw_world_ref）：
-     本宏仍决定 ①视觉回传/闸门/阻尼用的世界角来源；②对齐时定基准用的 IMU 来源。
-     =0 时位置反馈退化为旧公式（imu_yaw + 编码器），基准不参与，yaw 仍会随底盘 IMU 漂。 */
+      判定法：① 固定底盘、手动转云台，看串口 gimu/yaw 变不变；② 固定云台、手动转底盘，再看。 */
 #define GIMBAL_IMU_ON_GIMBAL    (1)
 #define GIMBAL_RC_DEAD          (10)
 
@@ -405,30 +375,10 @@ typedef struct {
     float ff_gain;                 /* 底盘角速度前馈系数 0~1，可在线改 */
     float stick_kf;                /* 摇杆速率前馈增益（跟手主旋钮），可在线改 */
     float yaw_bias;                /* 陀螺 yaw 零偏估计 deg/s */
-    float bias_accum;              /* 零偏累积角 deg。★已不参与每拍位置环，只在
-                                      【上电/重连对齐】时用来定 yaw_world_ref（保留，别删）*/
+    float bias_accum;              /* 零偏累积角 deg，从位置反馈里减掉 */
     float bias_k;                  /* 零偏跟踪系数，可在线改（0=关闭）*/
     float enc_rate_lpf;            /* 编码器角速度低通状态 deg/s */
     float enc_last;                /* 上一拍编码器角度 deg */
-    /* ---- ★ 世界基准 + 视觉慢修正（2026-10-19 重构，见 gimbal.h 的 GIMBAL_YAW_REF_TRIM_*）----
-       位置环反馈 world_fb = Gimbal_Wrap180(yaw + yaw_world_ref)。 */
-    float    yaw_world_ref;        /* 世界基准常数 deg（对齐时由 IMU 定一次，之后只由慢修正改）*/
-    float    yaw_ref_base;         /* 本次对齐时的基准值：慢修正累计量的零点 */
-    float    yaw_trim;             /* 自本次对齐以来慢修正的累计量 deg（限幅 ±yaw_trim_range）*/
-    float    yaw_trim_tgt_rate;    /* 视觉目标角速度估计 deg/s（判"目标是否在动"）*/
-    float    yaw_trim_last_tgt;    /* 上一帧视觉目标角 deg */
-    uint32_t yaw_trim_last_frame;  /* 上一帧视觉帧计数 */
-    uint16_t yaw_trim_frame_ms;    /* 距上一帧视觉数据的 ms（1kHz 计数）*/
-    uint16_t yaw_trim_hold_ms;     /* 慢修正允许条件连续满足的 ms */
-    /* 慢修正的可在线调参数（初值取自 GIMBAL_YAW_REF_TRIM_*，见 chassis_control.c 调参表）*/
-    float    yaw_trim_en;          /* 1=允许慢修正（gimbal_ref_trim）*/
-    float    yaw_trim_k;           /* 积分增益 1/s（gimbal_ref_k）*/
-    float    yaw_trim_step_max;    /* 单拍最大修正 deg（gimbal_ref_step）*/
-    float    yaw_trim_range;       /* 累计修正上限 deg（gimbal_ref_range）*/
-    float    yaw_trim_settle_ms;   /* 条件连续满足多久才修 ms（gimbal_ref_settle）*/
-    float    yaw_trim_err_max;     /* 允许修正的 |误差| 上限 deg（gimbal_ref_err）*/
-    float    yaw_trim_tgt_rate_max;/* 允许修正的 |目标角速度| 上限 deg/s（gimbal_ref_tgt_rate）*/
-    float    yaw_trim_rate_alpha;  /* 目标角速度估计低通系数（gimbal_ref_rate_a）*/
     /* ---- 自瞄（视觉）接管：yaw ---- */
     float    yaw_auto;        /* ≠0 = 使能视觉接管（操作手开关）。在线调 yaw_auto */
     float    yaw_auto_pre;    /* 上一拍使能标志（观察/兼容用）*/
@@ -456,10 +406,9 @@ typedef struct {
     uint32_t last_vision_frame; /* 上一拍见到的视觉有效帧计数（用于"是不是新的一帧"判定）*/
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */
     uint16_t dbus_offline_ms;      /* 遥控断线累计 ms */
-    float imu_yaw;                 /* IMU 实测的云台世界朝向 deg（观察/视觉回传/对齐定基准用）*/
-    /* ★ 串口绘图 ch7：位置环【本拍实际使用】的 yaw 反馈，单位 deg。
-       2026-10-19 起 = Gimbal_Wrap180(yaw + yaw_world_ref)（编码器关节角 + 世界基准常数），
-       不再等于 imu_yaw − bias_accum。只读镜像，不参与控制运算。
+    float imu_yaw;                 /* IMU 实测的云台世界朝向 deg（观察用）*/
+    /* ★ 串口绘图 ch7：位置环【实际使用】的 yaw 反馈，= imu_yaw − bias_accum，单位 deg。
+       只读镜像（在 gimbal.c 里紧跟 world_yaw 赋值），不参与任何控制运算。
        它和 target_yaw / target_yaw_smooth 同属【世界系】，两者相减才是真实跟随误差；
        ch2 的 yaw 是编码器【相对角】（另一个坐标系），不能直接拿来算误差。 */
     float yaw_fb;
