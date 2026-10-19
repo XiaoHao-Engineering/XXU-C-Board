@@ -1,17 +1,20 @@
 ﻿# 烧录固件到 STM32（像 CCS 的烧录按钮）
 #   .\tools\flash.ps1          只烧录
 #   .\tools\flash.ps1 -Build   先编译再烧录
+# ★ 使用 DAPLink / CMSIS-DAP 无线调试器 + pyocd（不再依赖 ST-Link）
 param([switch]$Build)
 
 $root = Split-Path -Parent $PSScriptRoot
 $hex  = Join-Path $root 'build\XXU-RoboMaster-Sentry.hex'
+$target = 'stm32f407ig'
 
 Write-Host ''
 Write-Host '===== XXU-RoboMaster-Sentry =====' -ForegroundColor Cyan
 
-if (-not (Get-Command STM32_Programmer_CLI -ErrorAction SilentlyContinue)) {
-    Write-Host '[X] 找不到 STM32_Programmer_CLI' -ForegroundColor Red
-    Write-Host '    先跑一次  .\tools\setup_env.ps1  然后重开终端'
+if (-not (Get-Command pyocd -ErrorAction SilentlyContinue)) {
+    Write-Host '[X] 找不到 pyocd' -ForegroundColor Red
+    Write-Host '    安装： pip install pyocd'
+    Write-Host '    器件包： pyocd pack install stm32f407ig'
     exit 1
 }
 
@@ -36,7 +39,7 @@ if ($Build) {
         }
     }
 
-    # --parallel 不带数字 = CMake 自动按本机可用核心数并行（比写死 -j 8 快得多）
+    # --parallel 不带数字 = CMake 自动按本机可用核心数并行
     & cmake --build $buildDir --parallel
     if ($LASTEXITCODE -ne 0) {
         Write-Host '[X] 编译失败，已停止' -ForegroundColor Red
@@ -50,25 +53,24 @@ if (-not (Test-Path $hex)) {
     exit 1
 }
 
-Write-Host '[2/2] 烧录 ...' -ForegroundColor Yellow
+Write-Host '[2/2] 烧录（pyocd + DAPLink）...' -ForegroundColor Yellow
 
-# 先试“复位下连接”，不行再试普通模式（有些板子没接复位线）
-$done = $false
-foreach ($mode in @('mode=UR', 'mode=normal')) {
-    Write-Host ('      连接方式 ' + $mode)
-    & STM32_Programmer_CLI -c port=SWD $mode -w $hex -v -rst
-    if ($LASTEXITCODE -eq 0) { $done = $true; break }
-    Write-Host '      这种方式没连上，换一种重试 ...' -ForegroundColor DarkYellow
+# pyocd 会自动选中唯一的 CMSIS-DAP 探针
+& pyocd flash -t $target $hex
+$ok = ($LASTEXITCODE -eq 0)
+if ($ok) {
+    # 烧完复位，让新固件立刻跑起来
+    & pyocd reset -t $target | Out-Null
 }
 
-if (-not $done) {
+if (-not $ok) {
     Write-Host ''
     Write-Host '[X] 烧录失败，按顺序检查：' -ForegroundColor Red
-    Write-Host '      1. ST-Link 插好没'
-    Write-Host '      2. 板子单独供电没（C 板走 XT30 / USB，ST-Link 供不起电机和 IMU 恒温）'
+    Write-Host '      1. DAPLink 调试器插好没（USB 认到 CMSIS-DAP 才可用）   pyocd list'
+    Write-Host '      2. 板子单独供电没（C 板走 XT30 / USB，DAPLink 供不起电机和 IMU 恒温）'
     Write-Host '      3. SWCLK / SWDIO / GND 接对没'
-    Write-Host '      4. STM32CubeIDE / CubeProgrammer / 另一个 VSCode 占着它没'
-    Write-Host '      5. 单独测一下： STM32_Programmer_CLI -c port=SWD mode=UR'
+    Write-Host '      4. STM32CubeIDE / CubeProgrammer / 另一个 VSCode / pyocd 进程占着它没'
+    Write-Host '      5. 单独测一下： pyocd reset -t stm32f407ig'
     exit 1
 }
 
