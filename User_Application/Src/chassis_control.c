@@ -225,7 +225,7 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
      Frame Size=28（线上 1 + 7×4 + 1 = 30 字节）。
    ★ ch1~ch6 = 视觉发的 6 个数（已换算成度），ch7 = yaw 控制反馈。*/
 static void Chassis_Apply_Plot_Mode(void) {
-    Serialplot_Set_Data(&user_serialplot, 7,
+    Serialplot_Set_Data(&user_serialplot, 8,
                         &user_vision.target_yaw_deg,        /* ch1 视觉 yaw 角度        度       */
                         &user_vision.target_yaw_vel_deg,    /* ch2 视觉 yaw 角速度      度/秒    */
                         &user_vision.target_yaw_acc_deg,    /* ch3 视觉 yaw 角加速度    度/秒²   */
@@ -233,6 +233,7 @@ static void Chassis_Apply_Plot_Mode(void) {
                         &user_vision.target_pitch_vel_deg,  /* ch5 视觉 pitch 角速度    度/秒    */
                         &user_vision.target_pitch_acc_deg,  /* ch6 视觉 pitch 角加速度  度/秒²   */
                         &user_gimbal.yaw_fb);               /* ch7 yaw 控制反馈（位置环实际用的世界角）度 */
+    &user_gimbal.yaw,               /* ch8 YAW 电机编码器关节角 度(±180)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
 }
 
 void ChassisControl_Init(Chassis* chassis, DBUS_DRIVES* dbus) {
