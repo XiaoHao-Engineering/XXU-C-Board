@@ -568,6 +568,20 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"auto_aim",     &user_shooter.auto_aim,   0.0f,  1.0f, NULL},
     {"v0_k",         &user_shooter.ballistics.v0_k, 0.0f, 0.02f, NULL},
     {"v0_b",         &user_shooter.ballistics.v0_b, 0.0f, 30.0f, NULL},
+
+    /* ---- ★ IMU 恒温加热（PF6 = TIM10_CH1，100ms 任务）----
+       两段式：先满占空比预热到 heater_preheat(默认47℃)，再 PID 恒温 heater_target(默认50℃)。
+       heater_target / heater_preheat 范围 30~60（60 已接近过温阈值，别贪高）；
+       heater_duty 是【占空比上限 0~1000 千分比】，不是手动强制值：
+         0    = 彻底不加热（比 heater_enable=0 更硬，PID 还在算但输出被压成 0）；
+         1000 = 允许满占空比（5V/47.8Ω ≈ 0.52W，116mA）。
+       heater_enable：1=允许，0=停加热。★ 温度 >65℃ 时固件会强制清 0（过温锁存），
+       降温后必须人工重新发 heater_enable=1#，不会自己恢复。
+       实际输出/CCR 看 user_heater.output_duty / user_heater.duty_ccr（只读，不进调参表）。*/
+    {"heater_enable",  &user_heater.enabled,           0.0f,    1.0f, NULL},
+    {"heater_target",  &user_heater.target_temp,      30.0f,   60.0f, NULL},
+    {"heater_preheat", &user_heater.preheat_base_temp,30.0f,   60.0f, NULL},
+    {"heater_duty",    &user_heater.duty_max,          0.0f, 1000.0f, NULL},
 };
 
 const SERIALPLOT_VAR* ChassisControl_Get_Tunable(uint8_t* count) {

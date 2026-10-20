@@ -140,8 +140,8 @@ int main(void)
   MX_USART6_UART_Init();
     BOOT_TRACE("M1 gpio/dma/uart inits OK");
   /* USER CODE BEGIN 2 */
-  /* JScope 采样节拍：TIM10 跑 10kHz（C 板蜂鸣器占 TIM4_CH3，PWM_Set_Frequency 会改
-     TIM4 的 ARR，节拍不能挂 TIM4；PF6 上的加热通道不启动）*/
+  /* JScope 采样节拍：TIM10 跑 10kHz（C 板蜂鸣器占 TIM4_CH3，PWM_Set_Frequency 会改 TIM4 的 ARR，
+     节拍不能挂 TIM4；PF6 加热通道由 Heater_Init 单独启动，TIM10 时基 + 加热 PWM 共存）*/
   JScope_Init(&htim10);
   TIMER_Init(&user_timer_10, &htim10, TIM10_CLK);
   TIMER_RegisterCallback(&user_timer_10, ChassisControl_JScopeCallback);
@@ -198,6 +198,10 @@ int main(void)
   BMI088_Init(&user_bmi088, &user_spi_accel, &user_spi_gyro, 2);   /* ★ 2ms=500Hz：把 IMU读取+EKF 的中断负载减半，先把系统从"几秒后锁死"里救出来 */
   Attitude_Init(&user_attitude, &user_bmi088, 0.002f);              /* ★ 必须与上面的 2ms 一致，否则 EKF 的 dt 错 */
     BOOT_TRACE("M2 IMU + attitude OK");
+
+  /* IMU 恒温加热：PF6 = TIM10_CH1（10kHz PWM），100ms 任务，温度用 BMI088 已读好的值。
+     ★ 必须在 MX_TIM10_Init() 之后调用；上电先满功率预热到 47℃，再用 PID 恒温 50℃。*/
+  Heater_Init(&user_heater);
 
   UART_Init(&user_serialplot_uart, &huart6);
 

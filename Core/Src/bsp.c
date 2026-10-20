@@ -72,6 +72,9 @@ SPI_DRIVES      user_spi_gyro = {0};
 BMI088_DRIVES   user_bmi088 = {0};
 ATTITUDE_DRIVES user_attitude = {0};
 
+/* IMU 恒温加热（PF6 = TIM10_CH1）*/
+HEATER_DRIVES   user_heater = {0};
+
 void LED_Blink_Callback(void *arg) {
     LED_Toggle((const LED_DRIVES*)arg);
 }

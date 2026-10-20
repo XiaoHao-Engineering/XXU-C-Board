@@ -112,4 +112,8 @@ extern SPI_DRIVES      user_spi_gyro;
 extern BMI088_DRIVES   user_bmi088;
 extern ATTITUDE_DRIVES user_attitude;
 
+/* IMU 恒温加热（PF6 = TIM10_CH1，10kHz PWM；温度直接用 user_bmi088.temperature）*/
+#include "../../User_Drives/User_Peripheral/user_heater.h"
+extern HEATER_DRIVES   user_heater;
+
 #endif /* USER_BSP_H */
