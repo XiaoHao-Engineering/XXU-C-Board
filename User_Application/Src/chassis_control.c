@@ -233,8 +233,8 @@ static void Chassis_Apply_Plot_Mode(void) {
                         &user_vision.target_pitch_vel_deg,  /* ch5 视觉 pitch 角速度    度/秒    */
                         &user_vision.target_pitch_acc_deg,  /* ch6 视觉 pitch 角加速度  度/秒²   */
                         &user_gimbal.yaw_fb,               /* ch7 yaw 控制反馈（位置环实际用的世界角）度 */
-    &user_gimbal.yaw,               /* ch8 YAW 电机编码器关节角 度(±180)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
-);
+    &user_gimbal.yaw);               /* ch8 YAW 电机编码器关节角 度(±180)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
+}
 
 
 void ChassisControl_Init(Chassis* chassis, DBUS_DRIVES* dbus) {
