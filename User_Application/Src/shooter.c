@@ -18,18 +18,33 @@ static SHOOTER_DRIVES* s_shooter = NULL;
 static void  Shooter_Update(void* arg);
 static void  Shooter_Ballistics_Update(void* arg);
 static void  Shooter_Enter_State(SHOOTER_DRIVES* shooter, Shooter_State state);
+static void  Shooter_Stopper_Set(SHOOTER_DRIVES* shooter, Shooter_Stopper_State state);
 static void  Shooter_Feed_One_Step(SHOOTER_DRIVES* shooter, float scale);
 static float Shooter_Step_Rotor_Deg(const SHOOTER_DRIVES* shooter);
+static void  Shooter_Single_Update(SHOOTER_DRIVES* shooter, uint8_t feed_ok, uint8_t fire_request);
+static void  Shooter_Continuous_Update(SHOOTER_DRIVES* shooter, uint8_t feed_ok);
 
 /* 函数体 */
 
 static float Shooter_Step_Rotor_Deg(const SHOOTER_DRIVES* shooter) {
-    /* 方向作用在【目标角】上，不是电流输出 —— 位置环这样反向才安全（见 shooter_config.h）*/
+    /* 方向作用在【目标角】上，不是电流输出 —— 位置环这样反向才安全（见 shooter_config.h）
+       一发拨盘角（默认 56.43°）× 减速比 36 = 2031.43° 转子角 */
     return shooter->feeder_dir * shooter->step_dial_deg * SHOOTER_FEEDER_GEAR;
 }
 
 static void Shooter_Feed_One_Step(SHOOTER_DRIVES* shooter, const float scale) {
     shooter->feeder_target_deg += Shooter_Step_Rotor_Deg(shooter) * scale;
+}
+
+/* 停火 FSM 状态切换：进入时把两个计时清零。
+   同一个状态重复调用是空操作（否则每拍都会把计时清零，永远到不了 1s）。 */
+static void Shooter_Stopper_Set(SHOOTER_DRIVES* shooter, const Shooter_Stopper_State state) {
+    if (shooter->stopper_state == state) {
+        return;
+    }
+    shooter->stopper_state = state;
+    shooter->stopper_ms_acc = 0;
+    shooter->stopper_cur_ms = 0;
 }
 
 static void Shooter_Enter_State(SHOOTER_DRIVES* shooter, const Shooter_State state) {
@@ -100,6 +115,18 @@ void Shooter_Init(SHOOTER_DRIVES* shooter,
     shooter->online_mask = 0.0f;
     shooter->ready_f = 0.0f;
 
+    /* 停火 FSM：上电默认失能；wheel_armed 先给 0，等拨轮真的回到中位才武装
+       （防止上电时拨轮已经推着 -> 起转完立刻自己打一发）*/
+    shooter->stopper_state = SHOOTER_STOPPER_DISABLED;
+    shooter->fire_mode = SHOOTER_MODE_FRICTION_ONLY;
+    shooter->stopper_ms_acc = 0;
+    shooter->stopper_cur_ms = 0;
+    shooter->wheel_armed = 0;
+    shooter->friction_current = 0.0f;
+    shooter->stop_f = 0.0f;
+    shooter->mode_f = 0.0f;
+    shooter->fric_cur_f = 0.0f;
+
     shooter->fire_rpm = SHOOTER_FRICTION_RPM_FIRE;
     shooter->step_dial_deg = SHOOTER_FEEDER_STEP_DIAL_DEG;
     shooter->feeder_dir = SHOOTER_FEEDER_DIR;
@@ -107,6 +134,10 @@ void Shooter_Init(SHOOTER_DRIVES* shooter,
     shooter->distance_m = 3.0f;
     shooter->height_m = 0.0f;
     shooter->auto_aim = 0.0f;
+
+    shooter->fire_dead = SHOOTER_FIRE_DEAD;
+    shooter->stopper_cur = SHOOTER_STOPPER_CUR_MA;
+    shooter->stopper_ms = SHOOTER_STOPPER_MS;
 
     s_shooter = shooter;
 
@@ -163,16 +194,105 @@ void Shooter_Set_Target_Distance(SHOOTER_DRIVES* shooter, const float distance_m
     shooter->height_m = height_m;
 }
 
-/* 1kHz 射击任务：采样滤波 / 状态机 / 下发 */
+/* ==================== 单发：位控 + 停火 FSM ====================
+ * sw2 上档。一发 = 当前反馈角 + 一发的转子角（step_dial_deg × GEAR）。
+ * 拨轮（DBUS roll）越过死区触发；必须回中位（死区×回滞比）才重新武装。
+ * 触发在 Shooter_Update 里统一"消费"成 fire_request（每拍最多一次），所以哪怕
+ * 冷却期间又拨了一下，也不会排到冷却结束后补发 —— 一次手势最多一发。
+ *
+ *  失能 --触发--> 激活 --电流>stopper_cur 或 1s--> 处理 --20ms--> 失能
+ *   ^                                                                    |
+ *   +--------------------------------------------------------------------+
+ *
+ * ⚠️ 这个函数每 1ms 被调用一次，内部只做整数计时 + 几个浮点比较，没有阻塞、没有三角函数。
+ */
+static void Shooter_Single_Update(SHOOTER_DRIVES* shooter, const uint8_t feed_ok,
+                                  const uint8_t fire_request) {
+    switch (shooter->stopper_state) {
+        case SHOOTER_STOPPER_DISABLED:
+            /* 失能：拨弹轮不出力 —— 目标角跟随实际角，位置误差恒 0 -> 位置环不输出 */
+            shooter->feeder_target_deg = shooter->feeder_angle;
+            if (fire_request) {
+                /* 触发已经消费掉：没起速/没就绪时拨动不会"排队"到之后就绪时补发 */
+                if (feed_ok) {
+                    /* 单发是位控：目标 = 当前【反馈】角 + 一发 */
+                    shooter->feeder_target_deg = shooter->feeder_angle
+                                               + Shooter_Step_Rotor_Deg(shooter);
+                    Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_ACTIVE);
+                }
+            }
+            break;
+
+        case SHOOTER_STOPPER_ACTIVE:
+            /* 激活：保持"一发"的目标角不动（继续往目标走），不在这里改写 target */
+            shooter->stopper_ms_acc += SHOOTER_PERIOD_MS;
+
+            if (fabsf(shooter->friction_current) > shooter->stopper_cur) {
+                shooter->stopper_cur_ms += SHOOTER_PERIOD_MS;
+            } else {
+                shooter->stopper_cur_ms = 0;
+            }
+
+            /* 电流超阈值（持续 CUR_MS）或 激活超时（PPT：1s）-> 处理 */
+            if (shooter->stopper_cur_ms >= SHOOTER_STOPPER_CUR_MS
+                || shooter->stopper_ms_acc >= (uint32_t)shooter->stopper_ms) {
+                Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_PROCESS);
+            }
+            break;
+
+        case SHOOTER_STOPPER_PROCESS:
+            /* 处理：角度闭环【锁住当前角】-> 发射机构停火；保持 PROCESS_MS 后回失能 */
+            shooter->feeder_target_deg = shooter->feeder_angle;
+            shooter->stopper_ms_acc += SHOOTER_PERIOD_MS;
+            if (shooter->stopper_ms_acc >= SHOOTER_STOPPER_PROCESS_MS) {
+                Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+            }
+            break;
+
+        default:
+            Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+            break;
+    }
+}
+
+/* ==================== 连发：速控（沿用原实现）====================
+ * sw2 下档。每 fire_interval_ms 走一步；拨盘内环本身就是速度环
+ * （外环角度->转速，内环转速->电流），节奏由 fire_int 决定、上限由 feed_ang_mo 决定。
+ * 连发不经过停火 FSM（那是单发防双发用的）。
+ */
+static void Shooter_Continuous_Update(SHOOTER_DRIVES* shooter, const uint8_t feed_ok) {
+    if (feed_ok) {
+        if (shooter->fire_timer_ms >= (uint32_t)shooter->fire_interval_ms) {
+            shooter->fire_timer_ms = 0;
+            Shooter_Feed_One_Step(shooter, 1.0f);
+        } else {
+            shooter->fire_timer_ms += SHOOTER_PERIOD_MS;
+        }
+    } else {
+        shooter->fire_timer_ms = 0;
+        /* 不拨弹时让目标角跟随实际角，避免积累误差、松档时突然追一大段 */
+        shooter->feeder_target_deg = shooter->feeder_angle;
+    }
+    Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+}
+
+/* 1kHz 射击任务：采样滤波 / 总闸 / 模式 / 状态机 / 下发 */
 static void Shooter_Update(void* arg) {
     SHOOTER_DRIVES* shooter = (SHOOTER_DRIVES*)arg;
 
+    /* ---------------- 1kHz 采样 ---------------- */
     const float rpm_left = DJI_Motor_Get_Speed(shooter->friction_left);
     const float rpm_right = DJI_Motor_Get_Speed(shooter->friction_right);
+    const float cur_left = DJI_Motor_Get_Current(shooter->friction_left);
+    const float cur_right = DJI_Motor_Get_Current(shooter->friction_right);
 
     /* 两个摩擦轮对装、转向相反，所以取绝对值再平均 */
     shooter->friction_rpm = (fabsf(rpm_left) + fabsf(rpm_right)) * 0.5f;
     shooter->friction_rpm_filt = FIR_Update(&shooter->fir_friction_rpm, shooter->friction_rpm);
+
+    /* 摩擦轮电流（mA）：停火 FSM 判据。取两轮【绝对值较大者】——任一轮过流就认 */
+    shooter->friction_current = fmaxf(fabsf(cur_left), fabsf(cur_right));
+    shooter->fric_cur_f = shooter->friction_current;
 
     shooter->feeder_angle = DJI_Motor_Get_Angle(shooter->feeder);
     shooter->feeder_current = DJI_Motor_Get_Current(shooter->feeder);
@@ -187,12 +307,35 @@ static void Shooter_Update(void* arg) {
     /* ★ 弹道解算已挪到 Shooter_Ballistics_Update()（低速任务），绝对不要放回这个 1kHz 函数：
        tanf/cosf 在软件浮点下很慢，而本函数跑在 1ms 的 SysTick 中断里，会把整套控制饿死 */
 
+    /* ---------------- 输入解析 ---------------- */
     const uint8_t sw2 = user_dbus.sw2;
+    const float wheel = (float)user_dbus.roll;
 
-    /* 拨弹允许：只有【下档 = 摩擦轮 + 拨弹盘】才拨弹；上档=仅摩擦轮，中档=全停。
-       拨轮 roll 因为 pitch 改到摇杆而空出来了 —— 若以后想改成"按住拨轮才拨弹"，
-       在这里与上 (user_dbus.roll > 阈值) 即可，不需要改状态机。 */
-    const uint8_t feed_enable = (sw2 == SHOOTER_SW2_FIRE) ? 1 : 0;
+    /* ★★ 总闸：yaw_auto（在线 yaw_auto=1# 打开自瞄）。
+       < 0.5 = 摩擦轮 + 拨弹盘全部失能，不管 sw2 在哪 */
+    const uint8_t arm = (user_gimbal.yaw_auto >= 0.5f) ? 1 : 0;
+
+    /* sw2 -> 模式：上(1)=单发 下(2)=连发 中(3)=仅摩擦轮。
+       0/其它（遥控没数据/野值）按"仅摩擦轮"处理，绝不乱拨弹 */
+    Shooter_Fire_Mode mode = SHOOTER_MODE_FRICTION_ONLY;
+    if (sw2 == SHOOTER_SW2_SINGLE) {
+        mode = SHOOTER_MODE_SINGLE;
+    } else if (sw2 == SHOOTER_SW2_CONTINUOUS) {
+        mode = SHOOTER_MODE_CONTINUOUS;
+    }
+
+    /* 拨轮回中位 -> 重新武装（50% 回滞，防止拨轮停在死区附近抖成连发）*/
+    if (fabsf(wheel) <= shooter->fire_dead * SHOOTER_FIRE_RELEASE_RATIO) {
+        shooter->wheel_armed = 1;
+    }
+
+    /* 拨轮越过死区 = 一次发射请求（每拍最多一次）。
+       ★ 不管停火 FSM 当前在哪个状态都【消费掉】这次手势：这样"冷却期间又拨一下"
+         不会被排到冷却结束后补发 —— 一次拨动最多一发。*/
+    const uint8_t fire_request = (shooter->wheel_armed && fabsf(wheel) >= shooter->fire_dead) ? 1 : 0;
+    if (fire_request) {
+        shooter->wheel_armed = 0;
+    }
 
     /* 摩擦轮是否已到转速：用【滤波后】的转速判断，避免噪声误判 */
     shooter->is_ready = (fabsf(shooter->friction_rpm_filt - shooter->fire_rpm)
@@ -203,84 +346,90 @@ static void Shooter_Update(void* arg) {
         shooter->state_ms = 60000U;
     }
 
-    switch (shooter->state) {
-        case SHOOTER_STATE_STOP:
-            shooter->friction_target = 0.0f;
-            /* 停火时目标角跟随实际角：位置误差恒 0 -> 位置环不输出，拨盘不发力也不发热 */
-            shooter->feeder_target_deg = shooter->feeder_angle;
-            if (SHOOTER_SW_VALID(sw2)) {
+    shooter->fire_mode = mode;
+
+    /* ---------------- 总闸 + 状态机 ---------------- */
+    if (!arm) {
+        /* 总闸关：摩擦轮和拨弹盘全部失能 */
+        if (shooter->state != SHOOTER_STATE_STOP) {
+            Shooter_Enter_State(shooter, SHOOTER_STATE_STOP);
+        }
+        shooter->friction_target = 0.0f;
+        shooter->feeder_target_deg = shooter->feeder_angle;
+        shooter->fire_timer_ms = 0;
+        shooter->jam_timer_ms = 0;
+        shooter->fire_mode = SHOOTER_MODE_FRICTION_ONLY;
+        Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+    } else {
+        switch (shooter->state) {
+            case SHOOTER_STATE_STOP:
+                /* 总闸一开就进起转；摩擦轮目标在 SPINUP/FIRE 里恒为 fire_rpm */
+                shooter->friction_target = shooter->fire_rpm;
                 Shooter_Enter_State(shooter, SHOOTER_STATE_SPINUP);
-            }
-            break;
+                break;
 
-        case SHOOTER_STATE_SPINUP:
-            shooter->friction_target = shooter->fire_rpm;
-            shooter->feeder_target_deg = shooter->feeder_angle;
-            /* 转速到位或超时都进 FIRE，但真正拨弹仍要 is_ready，不会没起速就乱拨 */
-            if (shooter->is_ready || shooter->state_ms > SHOOTER_SPINUP_TIMEOUT_MS) {
-                Shooter_Enter_State(shooter, SHOOTER_STATE_FIRE);
-            }
-            if (!SHOOTER_SW_VALID(sw2)) {
-                Shooter_Enter_State(shooter, SHOOTER_STATE_STOP);
-            }
-            break;
+            case SHOOTER_STATE_SPINUP:
+                shooter->friction_target = shooter->fire_rpm;
+                shooter->feeder_target_deg = shooter->feeder_angle;
+                Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+                /* 转速到位或超时都进 FIRE，但真正拨弹仍要 is_ready，不会没起速就乱拨 */
+                if (shooter->is_ready || shooter->state_ms > SHOOTER_SPINUP_TIMEOUT_MS) {
+                    Shooter_Enter_State(shooter, SHOOTER_STATE_FIRE);
+                }
+                break;
 
-        case SHOOTER_STATE_FIRE:
-            shooter->friction_target = shooter->fire_rpm;
+            case SHOOTER_STATE_FIRE: {
+                /* ★ 总闸开着 -> 摩擦轮【始终】转，目标就是保守弹速对应的 fire_rpm */
+                shooter->friction_target = shooter->fire_rpm;
 
-            if (!SHOOTER_SW_VALID(sw2)) {
-                Shooter_Enter_State(shooter, SHOOTER_STATE_STOP);
+                /* 卡弹判定只在【连发】做：单发由停火 FSM 兜底，而且 7 齿一步 2031.5°
+                   在 feed_ang_mo=2500RPM 下要约 0.135s，已经贴近 JAM_MS=150ms，容易误判 */
+                if (mode == SHOOTER_MODE_CONTINUOUS && shooter->is_ready
+                    && fabsf(shooter->feeder_err) > SHOOTER_JAM_ERR_DEG
+                    && shooter->feeder_current_filt > SHOOTER_JAM_CURRENT) {
+                    shooter->jam_timer_ms += SHOOTER_PERIOD_MS;
+                    if (shooter->jam_timer_ms >= SHOOTER_JAM_MS) {
+                        shooter->jam_count++;
+                        Shooter_Enter_State(shooter, SHOOTER_STATE_REVERSE);
+                        break;
+                    }
+                } else {
+                    shooter->jam_timer_ms = 0;
+                }
+
+                if (mode == SHOOTER_MODE_SINGLE) {
+                    Shooter_Single_Update(shooter, shooter->is_ready, fire_request);
+                } else if (mode == SHOOTER_MODE_CONTINUOUS) {
+                    Shooter_Continuous_Update(shooter, shooter->is_ready);
+                } else {
+                    /* 中档：只转摩擦轮，拨盘不出力 */
+                    shooter->feeder_target_deg = shooter->feeder_angle;
+                    shooter->fire_timer_ms = 0;
+                    Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+                }
                 break;
             }
 
-            /* 卡弹判定：位置没跟上 + 电流大，两个条件同时持续 JAM_MS 才判。
-               只看电流会被机构本身的机械冲击误触发。 */
-            if (shooter->is_ready
-                && fabsf(shooter->feeder_err) > SHOOTER_JAM_ERR_DEG
-                && shooter->feeder_current_filt > SHOOTER_JAM_CURRENT) {
-                if (shooter->jam_timer_ms < SHOOTER_JAM_MS) {
-                    shooter->jam_timer_ms += SHOOTER_PERIOD_MS;
+            case SHOOTER_STATE_REVERSE:
+                /* 退弹期间保持摩擦轮转速，退完回 FIRE */
+                shooter->friction_target = shooter->fire_rpm;
+                Shooter_Stopper_Set(shooter, SHOOTER_STOPPER_DISABLED);
+                if (shooter->state_ms >= SHOOTER_REVERSE_MS) {
+                    Shooter_Enter_State(shooter, SHOOTER_STATE_FIRE);
                 }
-                if (shooter->jam_timer_ms >= SHOOTER_JAM_MS) {
-                    shooter->jam_count++;
-                    Shooter_Enter_State(shooter, SHOOTER_STATE_REVERSE);
-                    break;
-                }
-            } else {
-                shooter->jam_timer_ms = 0;
-            }
+                break;
 
-            /* 拨弹。没到转速就什么都不做，并把计时清零。
-               上档（仅摩擦轮）同样进 FIRE 保持转速，但 feed_enable=0 -> 不拨弹、目标角跟手 */
-            if (shooter->is_ready && feed_enable) {
-                if (shooter->fire_timer_ms >= (uint32_t)shooter->fire_interval_ms) {
-                    shooter->fire_timer_ms = 0;
-                    Shooter_Feed_One_Step(shooter, 1.0f);
-                } else {
-                    shooter->fire_timer_ms += SHOOTER_PERIOD_MS;
-                }
-            } else {
-                shooter->fire_timer_ms = 0;
-                /* 不拨弹时让目标角跟随实际角，避免积累误差、松档时突然追一大段 */
-                shooter->feeder_target_deg = shooter->feeder_angle;
-            }
-            break;
-
-        case SHOOTER_STATE_REVERSE:
-            /* 退弹期间保持摩擦轮转速，退完回 FIRE */
-            shooter->friction_target = shooter->fire_rpm;
-            if (shooter->state_ms >= SHOOTER_REVERSE_MS) {
-                Shooter_Enter_State(shooter, SHOOTER_STATE_FIRE);
-            }
-            break;
-
-        default:
-            Shooter_Enter_State(shooter, SHOOTER_STATE_STOP);
-            break;
+            default:
+                Shooter_Enter_State(shooter, SHOOTER_STATE_STOP);
+                break;
+        }
     }
 
     /* 状态机镜像给串口绘图看（0=STOP 1=SPINUP 2=FIRE 3=REVERSE）*/
     shooter->state_f = (float)shooter->state;
+    /* 停火 FSM / 发射模式镜像（0/1/2），留给以后加绘图通道或用调试器看 */
+    shooter->stop_f = (float)shooter->stopper_state;
+    shooter->mode_f = (float)shooter->fire_mode;
 
     /* 三个电机的反馈状态打包成一个数给上位机看：bit0=左轮 bit1=右轮 bit2=拨弹轮 */
     shooter->online_mask = (float)((DJI_Motor_Is_Online(shooter->friction_left) ? 1 : 0)

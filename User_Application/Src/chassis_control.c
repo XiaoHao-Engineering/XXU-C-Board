@@ -541,7 +541,19 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"pitch_spd_mi", &user_gimbal.pitch_pid_speed.max_iout, 0.0f, 16384.0f, NULL},
     {"pitch_spd_md", &user_gimbal.pitch_pid_speed.max_dout, 0.0f, 16384.0f, NULL},
 
-    /* ---- 射击机构（两摩擦轮 + 一拨弹轮，都挂 CAN2）；fire_* 只挂左轮，回调同步右轮 ---- */
+    /* ---- 射击机构（两摩擦轮 + 一拨弹轮，都挂 CAN2）；fire_* 只挂左轮，回调同步右轮 ----
+       ★★ 新发射逻辑（总闸 + 三档 + 停火 FSM）的旋钮都在这一段，全部是 float：
+          friction_rpm  保守弹速 20m/s 对应的摩擦轮转速（≈6366 -> 取 6400）。
+                        ⚠️ 它是 fire_rpm 的【别名，同一个变量】，两个名字都能改。
+          fire_dead     单发【拨轮】触发死区（DBUS roll，±660）：越小越灵敏；
+                        回中位判据 = 它 × 0.5（回滞，防一直推着连发）
+          stopper_cur   停火 FSM 的电流阈值，单位【mA】：PPT 的 8A 就填 8000
+          stopper_ms    停火 FSM 的"激活"超时 ms：PPT 是 1000
+       ★ 一发角度用已有的 step_deg（默认 360/7+5 = 56.43° 拨盘角，内部 ×36 减速比）*/
+    {"friction_rpm", &user_shooter.fire_rpm,            0.0f, 9000.0f, NULL},
+    {"fire_dead",    &user_shooter.fire_dead,           0.0f,  660.0f, NULL},
+    {"stopper_cur",  &user_shooter.stopper_cur,         0.0f, 20000.0f, NULL},
+    {"stopper_ms",   &user_shooter.stopper_ms,         50.0f, 5000.0f, NULL},
     {"fire_rpm",     &user_shooter.fire_rpm,            0.0f, 9000.0f, NULL},
     {"step_deg",     &user_shooter.step_dial_deg,       1.0f,  180.0f, NULL},
     /* ★ 拨盘方向：转反了就翻这个（-1 = 反向）。作用在目标角上，位置环反向是安全的 */
