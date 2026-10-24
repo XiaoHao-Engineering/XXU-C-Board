@@ -466,6 +466,10 @@ typedef struct {
        ★ 云台控制内部（target_yaw / 编码器角 / PID / 限位 / 回位 / cam_yaw_off / cam_pitch_off）
          仍然全部按【度】标定；这里只是给绘图/上位机看的一份弧度副本，绝不参与任何控制计算。
        每拍在 gimbal.c 里紧跟 yaw_fb / yaw 的赋值更新（1kHz）。 */
+    float tx_qw;        /* 发给视觉的四元数（已补 -bias_accum 旋转，与 yaw 字段同基准）*/
+    float tx_qx;
+    float tx_qy;
+    float tx_qz;
     float yaw_fb_rad;    /* ch7 的弧度镜像 = yaw_fb × GIMBAL_DEG2RAD（仅供绘图观测）*/
     float yaw_rad;       /* ch8 的弧度镜像 = yaw    × GIMBAL_DEG2RAD（仅供绘图观测）*/
 } GIMBAL_DRIVES;

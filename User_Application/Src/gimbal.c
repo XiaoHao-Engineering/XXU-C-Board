@@ -413,9 +413,26 @@ static void Gimbal_Update(void* arg) {
                        (gimbal->yaw_auto > 0.5f) ? VISION_TX_MODE_AUTOAIM : VISION_TX_MODE_IDLE);
     /* ★ yaw 发【扣掉零偏后】的值(bias_accum 跟踪到的零偏)，而不是未修正的 imu_yaw：
        这样视觉的世界系跟的是和闭环同一个 yaw_fb，漂移速度一致（原来发 imu_yaw 会漂得更快）*/
+    /* ★ 发给视觉的四元数也要和 yaw 字段【同一个基准】：把 q 绕世界 Z 轴旋转 -bias_accum，
+       否则 q 里含着未修正的 yaw 漂移，视觉用它定坐标系就漂得更快。
+       q_rot=(c,0,0,-s)，c=cos(b/2)、s=sin(b/2)、b=bias_accum(wrap到±180)；q_out=q_rot⊗q_in。 */
+    {
+        const float b_half = 0.5f * Gimbal_Wrap180(gimbal->bias_accum) * GIMBAL_DEG2RAD;
+        const float qc = cosf(b_half);
+        const float qs = sinf(b_half);
+        const float qw0 = user_attitude.qe_q[0];
+        const float qx0 = user_attitude.qe_q[1];
+        const float qy0 = user_attitude.qe_q[2];
+        const float qz0 = user_attitude.qe_q[3];
+        gimbal->tx_qw = qc * qw0 + qs * qz0;
+        gimbal->tx_qx = qc * qx0 + qs * qy0;
+        gimbal->tx_qy = qc * qy0 - qs * qx0;
+        gimbal->tx_qz = qc * qz0 - qs * qw0;
+    }
+
     Vision_Set_Tx_Attitude(&user_vision,
-                           user_attitude.qe_q[0], user_attitude.qe_q[1],
-                           user_attitude.qe_q[2], user_attitude.qe_q[3],
+        gimbal->tx_qw, gimbal->tx_qx,
+        gimbal->tx_qy, gimbal->tx_qz,
                            /* ★ 按包内单位换算（VISION_ANGLE_UNIT_RAD=1 时 -> 弧度/弧度每秒，与参考工程一致）*/
                            Gimbal_Wrap180(gimbal->imu_yaw - gimbal->bias_accum) * VISION_DEG2PKG,
                            user_attitude.yaw_rate * VISION_DEG2PKG,
