@@ -411,11 +411,13 @@ static void Gimbal_Update(void* arg) {
        若这里改成看 aim_takeover（依赖 mode!=0），就会形成"等对方先动"的死锁。 */
     Vision_Set_Tx_Mode(&user_vision,
                        (gimbal->yaw_auto > 0.5f) ? VISION_TX_MODE_AUTOAIM : VISION_TX_MODE_IDLE);
+    /* ★ yaw 发【扣掉零偏后】的值(bias_accum 跟踪到的零偏)，而不是未修正的 imu_yaw：
+       这样视觉的世界系跟的是和闭环同一个 yaw_fb，漂移速度一致（原来发 imu_yaw 会漂得更快）*/
     Vision_Set_Tx_Attitude(&user_vision,
                            user_attitude.qe_q[0], user_attitude.qe_q[1],
                            user_attitude.qe_q[2], user_attitude.qe_q[3],
                            /* ★ 按包内单位换算（VISION_ANGLE_UNIT_RAD=1 时 -> 弧度/弧度每秒，与参考工程一致）*/
-                           gimbal->imu_yaw * VISION_DEG2PKG,
+                           Gimbal_Wrap180(gimbal->imu_yaw - gimbal->bias_accum) * VISION_DEG2PKG,
                            user_attitude.yaw_rate * VISION_DEG2PKG,
                            tx_pitch * VISION_DEG2PKG,
                            gimbal->pitch_speed * 6.0f * VISION_DEG2PKG);
