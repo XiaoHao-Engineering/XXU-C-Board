@@ -87,6 +87,8 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     Gimbal_Wave_Apply();
     gimbal->imu_yaw = 0.0f;
     gimbal->yaw_fb   = 0.0f;      /* 位置环实际反馈镜像（串口绘图 ch7）*/
+    gimbal->yaw_fb_rad = 0.0f;    /* ch7 弧度镜像（只读观测，见 gimbal.h）*/
+    gimbal->yaw_rad    = 0.0f;    /* ch8 弧度镜像（只读观测，见 gimbal.h）*/
     gimbal->target_speed = 0.0f;
 
     PID_Init(&gimbal->yaw_pid, GIMBAL_YAW_KP, GIMBAL_YAW_KI, GIMBAL_YAW_KD,
@@ -387,6 +389,8 @@ static void Gimbal_Update(void* arg) {
     }
 
     gimbal->yaw = Gimbal_Get_Yaw(gimbal);
+    /* ★ 串口绘图 ch8 的弧度镜像（只读观测，不参与控制）：每拍同步一次 */
+    gimbal->yaw_rad = gimbal->yaw * GIMBAL_DEG2RAD;
 #if GIMBAL_LOCK_WORLD
     /* 回传给视觉：四元数(EKF) + 当前角度/角速度 + 弹速。
        视觉需要这些才能把"像素偏差"换成"目标角度"，并做完整三维变换 */
@@ -473,6 +477,8 @@ static void Gimbal_Update(void* arg) {
          ch7 - ch5 = 真实跟随误差；ch2 的编码器相对角是另一个坐标系，不能这样相减。
        ★ 单位 deg，±180；对齐前（未进位置环）保持上次值/初值 0。 */
     gimbal->yaw_fb = world_yaw;
+    /* ★ 串口绘图 ch7 的弧度镜像（只读观测，不参与控制）：与 yaw_fb 同一拍、同一个 world_yaw */
+    gimbal->yaw_fb_rad = world_yaw * GIMBAL_DEG2RAD;
 
     /* ★★★ 目标角一阶平滑（治"调过去晃一下再回来"最有效的一条）--------------------
        摇杆给的是【阶跃式】目标角：松杆那一刻 target_yaw 突然停住/拐弯，位置环看到的是

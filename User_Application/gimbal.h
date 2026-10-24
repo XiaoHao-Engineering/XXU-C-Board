@@ -13,6 +13,11 @@
    推开自动回位；底盘自转靠前馈抵消，云台不跟底盘转。反馈用板载 IMU 的 yaw（A 板装在 yaw 上）。*/
 #define GIMBAL_LOCK_WORLD       (1)      /* 0=退回纯速度控制（IMU 有问题时用）*/
 
+/* ★ 角度换算常量：度 -> 弧度（π/180）。
+   ★ 只给【观测/绘图镜像】用；云台控制内部（target_yaw / 编码器角 / PID / 限位 / 回位 /
+     cam_yaw_off / cam_pitch_off）全部按【度】标定，不要拿它去改任何控制量。 */
+#define GIMBAL_DEG2RAD          (0.017453292519943295f)
+
 #define GIMBAL_YAW_MOTOR_ID     (1)          /* GM6020 的 CAN ID (1~7) */
 #define GIMBAL_YAW_ZERO_DEG     (0.0f)       /* 云台正对底盘前方时的电机多圈角度 */
 #define GIMBAL_YAW_DIR          (1.0f)       /* 角度增大方向：+1 或 -1 现场核对 */
@@ -456,6 +461,13 @@ typedef struct {
     uint8_t  pitch_boot_homed;             /* 1=本次上电的回位已结束（到达/摇杆接管/视觉接管/超时），掉线重连不再回位 */
     uint16_t pitch_homing_ms;              /* 回位已进行的时间 ms（超时判据，1kHz 下每拍 +1）*/
     uint16_t pitch_homing_in_pos_ms;       /* 连续到位的时间 ms（到位判据的防抖计数）*/
+
+    /* ---- ★★ 串口绘图 ch7/ch8 的弧度镜像（只读观测量，加在结构体最后、不影响已有布局）----
+       ★ 云台控制内部（target_yaw / 编码器角 / PID / 限位 / 回位 / cam_yaw_off / cam_pitch_off）
+         仍然全部按【度】标定；这里只是给绘图/上位机看的一份弧度副本，绝不参与任何控制计算。
+       每拍在 gimbal.c 里紧跟 yaw_fb / yaw 的赋值更新（1kHz）。 */
+    float yaw_fb_rad;    /* ch7 的弧度镜像 = yaw_fb × GIMBAL_DEG2RAD（仅供绘图观测）*/
+    float yaw_rad;       /* ch8 的弧度镜像 = yaw    × GIMBAL_DEG2RAD（仅供绘图观测）*/
 } GIMBAL_DRIVES;
 
 void  Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor);

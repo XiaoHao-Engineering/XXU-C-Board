@@ -232,8 +232,8 @@ static void Chassis_Apply_Plot_Mode(void) {
                         &user_vision.target_pitch,            /* ch4 视觉 pitch 角度      弧度     */
                         &user_vision.target_pitch_vel,    /* ch5 视觉 pitch 角速度    弧度/秒  */
                         &user_vision.target_pitch_acc,    /* ch6 视觉 pitch 角加速度  弧度/秒² */
-                        &user_gimbal.yaw_fb,               /* ch7 yaw 控制反馈（位置环实际用的世界角）度 */
-    &user_gimbal.yaw);               /* ch8 YAW 电机编码器关节角 度(±180)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
+                        &user_gimbal.yaw_fb_rad,           /* ch7 yaw 控制反馈（位置环实际用的世界角）弧度 */
+    &user_gimbal.yaw_rad);           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
 }
 
 
