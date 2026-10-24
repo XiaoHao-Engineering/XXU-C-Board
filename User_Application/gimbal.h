@@ -77,8 +77,11 @@
    ita_robot.cpp:644/727  feedforward = 系数 × 视觉目标角速度
    ⚠️ 它们只是"用视觉角速度的百分之多少去喂速度环"的无量纲系数（前馈不在反馈回路里，
       改它不影响稳定性，只影响跟踪移动目标时的滞后/超调）。在线可调：aim_ff_gain / aim_ff_pitch */
-#define GIMBAL_AIM_FF_GAIN_YAW   (0.0f)   /* ★ 实测(2026-10-17)关掉才不抖：视觉角速度噪声大(±16deg/s)，开0.5会把噪声灌进速度环。要打提前量只能在线 0.1/0.2 小步加 */
-#define GIMBAL_AIM_FF_GAIN_PITCH (0.0f)   /* ★ 同上，pitch 视觉速度前馈关掉；之前 0.6 导致 pitch 电机嗡嗡震 */
+#define GIMBAL_AIM_FF_GAIN_YAW   (0.25f)  /* ★ 实测(2026-10-24)：前馈 0.25 + 自瞄平滑 6ms，响应明显变快且可接受；前馈理论最优 1.0，受视觉角速度噪声限制先取 0.25
+                                             （历史：2026-10-17 因视觉角速度噪声大(±16deg/s)、开 0.5 会把噪声灌进速度环而关到 0；
+                                               本次 0.25 是"打提前量"与"不抖"之间的实测折中）*/
+#define GIMBAL_AIM_FF_GAIN_PITCH (0.25f)  /* ★ 实测(2026-10-24)：前馈 0.25 + 自瞄平滑 6ms，响应明显变快且可接受；前馈理论最优 1.0，受视觉角速度噪声限制先取 0.25
+                                             （历史：曾试 0.6 导致 pitch 电机嗡嗡震，故当时关到 0；本次与 yaw 同步取 0.25）*/
 /* 兼容旧名：原来只有一个 GIMBAL_AIM_FF_GAIN(1.0)，语义就是 yaw 的角速度前馈系数 */
 #define GIMBAL_AIM_FF_GAIN       (GIMBAL_AIM_FF_GAIN_YAW)
 #define GIMBAL_AIM_DELAY_MS     (20.0f)    /* 链路延迟估计 ms，需实测（先给 20）*/
@@ -228,11 +231,12 @@
    ★★ 分模式（用户要求：摇杆要快、自瞄要稳）：拆成两套时间常数，运行时按
       gimbal->aim_takeover 自动二选一（见 gimbal.c 算 alpha_s 那一段）：
         · aim_takeover == 0（摇杆 / 没识别到装甲板 / 视觉未接管）-> RC  = 12ms（小 = 跟手）
-        · aim_takeover != 0（识别到装甲板、自瞄接管）            -> AIM = 40ms（大 = 不抖）
+        · aim_takeover != 0（识别到装甲板、自瞄接管）            -> AIM = 6ms（★ 2026-10-24 实测：前馈 0.25 在，6ms 跟手且不抖）
       ⚠️ 两套都保留在线可调：gimbal_tgt_smooth 改【摇杆】那套，gimbal_aim_smooth 改【自瞄】那套。
          （结构体字段名 tgt_smooth_ms 现在表示"摇杆值"，保留是为了不破坏已有的串口命令。） */
 #define GIMBAL_TGT_SMOOTH_RC_MS   (12.0f)   /* 摇杆/无目标时：小=跟手 */
- #define GIMBAL_TGT_SMOOTH_AIM_MS  (12.0f)   /* ★ 实测(2026-10-19)：40ms 响应太慢，12ms 明显变快且不抖(前馈已关，抖源已消除) */
+ #define GIMBAL_TGT_SMOOTH_AIM_MS  (6.0f)   /* ★ 实测(2026-10-24)：前馈 0.25 + 自瞄平滑 6ms，响应明显变快且可接受；前馈理论最优 1.0，受视觉角速度噪声限制先取 0.25
+                                             （历史：2026-10-19 从 40ms 降到 12ms 已明显变快；本次再降到 6ms，配合 0.25 前馈跟手更好）*/
 /* 兼容旧引用：= 摇杆值；运行时不再直接用这个宏（按 aim_takeover 二选一） */
 #define GIMBAL_TGT_SMOOTH_MS      GIMBAL_TGT_SMOOTH_RC_MS
 

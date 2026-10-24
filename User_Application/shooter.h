@@ -79,7 +79,8 @@ typedef struct {
        online_mask 的 bit0=摩擦轮左 bit1=摩擦轮右 bit2=拨弹轮，对应位为 1 表示该电机有反馈；
        ready_f 是 is_ready 的 float 镜像。
        ★ 排查方法：fstate 会变(1/2) 但 online_mask=0 -> 电机真掉线；
-                    fstate 恒为 0 -> 总闸 yaw_auto 没开，或遥控 sw2 档位没被识别。*/
+                    fstate 恒为 0 -> 总闸没满足：yaw_auto 没开、或 sw1 没拨到【上】、
+                    或遥控 sw2 档位没被识别。*/
     float online_mask;
     float ready_f;
 

@@ -36,45 +36,59 @@ static PID_Controller s_heading_pid = {0};
 static Chassis_Mode   s_mode = CHASSIS_MODE_MANUAL;
 static uint8_t        s_offline_ms = 0;
 static uint8_t        s_prev_sw1 = 0;
+static uint8_t        s_prev_auto = 0;   /* 上一拍 yaw_auto（0=摇杆 1=自瞄），用来检测"刚退出自瞄" */
 static Chassis_HeadingSource s_heading_src = ChassisControl_NoHeading;
 static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
 
-/* ==================== 串口绘图：只有一个固定模式（7 通道）====================
+/* ==================== 串口绘图：只有一个固定模式（12 通道）====================
  *
  * ★ 上电即这个模式，没有模式切换、没有 plot_mode 命令（原来的 case 0~10 已全部删除）。
  *
  * 通道顺序（从上到下，不能改；SerialPlot 里的通道号就是它）：
- *   ch1  target_yaw_deg        视觉目标 YAW 角度        度        user_vision.target_yaw_deg
- *   ch2  target_yaw_vel_deg    视觉目标 YAW 角速度      度/秒     user_vision.target_yaw_vel_deg
- *   ch3  target_yaw_acc_deg    视觉目标 YAW 角加速度    度/秒²    user_vision.target_yaw_acc_deg
- *   ch4  target_pitch_deg      视觉目标 PITCH 角度      度        user_vision.target_pitch_deg
- *   ch5  target_pitch_vel_deg  视觉目标 PITCH 角速度    度/秒     user_vision.target_pitch_vel_deg
- *   ch6  target_pitch_acc_deg  视觉目标 PITCH 角加速度  度/秒²    user_vision.target_pitch_acc_deg
- *   ch7  yaw_fb                位置环实际用的 yaw 反馈  度        user_gimbal.yaw_fb
- *                              = imu_yaw − bias_accum（世界系，位置环的同一个 world_yaw）
+ *   ch1  target_yaw           视觉目标 YAW 角度        弧度      user_vision.target_yaw
+ *   ch2  target_yaw_vel       视觉目标 YAW 角速度      弧度/秒   user_vision.target_yaw_vel
+ *   ch3  target_yaw_acc       视觉目标 YAW 角加速度    弧度/秒²  user_vision.target_yaw_acc
+ *   ch4  target_pitch         视觉目标 PITCH 角度      弧度      user_vision.target_pitch
+ *   ch5  target_pitch_vel     视觉目标 PITCH 角速度    弧度/秒   user_vision.target_pitch_vel
+ *   ch6  target_pitch_acc     视觉目标 PITCH 角加速度  弧度/秒²  user_vision.target_pitch_acc
+ *   ch7  yaw_fb_rad           位置环实际用的 yaw 反馈  弧度      user_gimbal.yaw_fb_rad
+ *                             = imu_yaw − bias_accum（世界系，位置环的同一个 world_yaw）
+ *   ch8  yaw_rad              YAW 电机编码器关节角    弧度(±π)  user_gimbal.yaw_rad
+ *                             物理量、不漂，用来对比 ch7(IMU) 看漂移
+ *   ch9  tx_qw                发给视觉的四元数 w      无量纲    user_gimbal.tx_qw
+ *   ch10 tx_qx                发给视觉的四元数 x      无量纲    user_gimbal.tx_qx
+ *   ch11 tx_qy                发给视觉的四元数 y      无量纲    user_gimbal.tx_qy
+ *   ch12 tx_qz                发给视觉的四元数 z      无量纲    user_gimbal.tx_qz
  *
  * ★ ch1~ch6 就是视觉通过 USART1 发过来的 6 个数，顺序完全一致（yaw 角、yaw 角速度、
- *   yaw 角加速度、pitch 角、pitch 角速度、pitch 角加速度）。视觉包内是【弧度】，
- *   user_vision.c 收帧时已统一 ×VISION_PKG2DEG 写入 _deg 镜像，所以这里画出来是【度】制。
+ *   yaw 角加速度、pitch 角、pitch 角速度、pitch 角加速度）。这里传的是 user_vision 里
+ *   【包内原始单位】的镜像（弧度 / 弧度每秒 / 弧度每秒²）；需要度制时用对应的 _deg 字段
+ *   （user_vision.target_yaw_deg 等，收帧时已 ×VISION_PKG2DEG）。
+ *
+ * ★ ch9~ch12 就是【gimbal.c 每拍算好、经 USART1 发给视觉】的那组四元数
+ *   （tx_qw/tx_qx/tx_qy/tx_qz，已补 -bias_accum 旋转，与发给视觉的 yaw 字段同一基准）。
+ *   这里引用的是同一份字段、不是另算一份，所以画出来的就是视觉真正收到的数据。
  *
  * ★ ch1(视觉目标 yaw) 与 ch7(世界系 yaw 反馈) 同在世界系，二者之差可当作 yaw 跟随
  *   误差观察（前提是视觉与 IMU 的零偏已对齐）。
  *
  * ★★ SerialPlot（hyOzd 那个 Qt 上位机）里必须这样设，填错就画不出来：
  *      Frame Start = AB
- *      #Channels   = 7
- *      Frame Size  = 28            <-- 7 通道 × 4 字节（float32），不是 30！
+ *      #Channels   = 12
+ *      Frame Size  = 48            <-- 12 通道 × 4 字节（float32），不是 50！
  *      Number Type = float（32 位）/ Little Endian
  *      Checksum    = 累加和（Sum，在通道数据之后）
- *    线上实际帧长 = 1(帧头) + 28(数据) + 1(校验和) = 30 字节。
+ *    线上实际帧长 = 1(帧头) + 48(数据) + 1(校验和) = 50 字节。
  *    ★ 通道数 / Frame Size 与固件不一致的典型症状：串口"有数据在跑"，
  *      但 SerialPlot 显示 0sps + Checksum failed，曲线完全不动 —— 帧长对不上，
  *      永远同步不到帧头。
+ *    ★ 带宽：50 字节 × 100Hz（CHASSIS_SERIALPLOT_PERIOD_MS=10）= 5.0 kB/s ≈ 50kbps
+ *      （含起始/停止位），115200 8N1 有 11.52kB/s，占用约 43%，余量充足。
  *
  * ★★★ 这里【只允许传 float 变量的地址】：Serialplot_Set_Data() 内部对每个指针
  *     按 sizeof(float)=4 做 memcpy，传 uint16_t / uint8_t / int32_t 的地址会读到
  *     相邻字段的字节 -> 解出 NaN / 1e38 -> SerialPlot 画不出线。
- *     同理，通道数必须与实参个数完全一致（7 个），否则 data_num 与指针数不符。
+ *     同理，通道数必须与实参个数完全一致（12 个），否则 data_num 与指针数不符。
  *     （s_yaw_encoder_abs / s_pitch_encoder_abs 两个 float 镜像仍保留并更新，
  *       只是当前不再是绘图通道，以后要用可以直接加回。）
  * ========================================================================== */
@@ -216,16 +230,17 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
     return (float)motor->rotor_angle / PLOT_ENCODER_CPR * 360.0f;
 }
 
-/* 登记本帧要上报的 7 个通道。
+/* 登记本帧要上报的 12 个通道。
    ★ 单模式：上电就这一套，没有任何模式切换、没有 plot_mode 命令。
    ★ 通道顺序 / 含义 / 单位 / 上位机设置见本文件顶部的说明块。
    ★ 只许传【float 变量】的地址：Serialplot_Set_Data() 按 sizeof(float)
      逐 4 字节 memcpy，传非 float 的地址会读到相邻字段的字节 -> NaN / 1e38。
-   ★ 通道数必须与实参个数一致（7）；上位机固定 Frame Start=AB / #Channels=7 /
-     Frame Size=28（线上 1 + 7×4 + 1 = 30 字节）。
-   ★ ch1~ch6 = 视觉发的 6 个数（已换算成度），ch7 = yaw 控制反馈。*/
+   ★ 通道数必须与实参个数一致（12）；上位机固定 Frame Start=AB / #Channels=12 /
+     Frame Size=48（线上 1 + 12×4 + 1 = 50 字节）。
+   ★ ch1~ch6 = 视觉发的 6 个数，ch7 = yaw 控制反馈，ch8 = YAW 编码器关节角，
+     ch9~ch12 = 发给视觉的四元数 w/x/y/z（gimbal.c 里每拍更新，见 tx_qw 那一段）。*/
 static void Chassis_Apply_Plot_Mode(void) {
-    Serialplot_Set_Data(&user_serialplot, 8,
+    Serialplot_Set_Data(&user_serialplot, 12,
                         &user_vision.target_yaw,                /* ch1 视觉 yaw 角度        弧度     */
                         &user_vision.target_yaw_vel,        /* ch2 视觉 yaw 角速度      弧度/秒  */
                         &user_vision.target_yaw_acc,        /* ch3 视觉 yaw 角加速度    弧度/秒² */
@@ -233,7 +248,11 @@ static void Chassis_Apply_Plot_Mode(void) {
                         &user_vision.target_pitch_vel,    /* ch5 视觉 pitch 角速度    弧度/秒  */
                         &user_vision.target_pitch_acc,    /* ch6 视觉 pitch 角加速度  弧度/秒² */
                         &user_gimbal.yaw_fb_rad,           /* ch7 yaw 控制反馈（位置环实际用的世界角）弧度 */
-    &user_gimbal.yaw_rad);           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
+    &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
+    &user_gimbal.tx_qw,    /* ch9  发给视觉的四元数 w */
+    &user_gimbal.tx_qx,    /* ch10 发给视觉的四元数 x */
+    &user_gimbal.tx_qy,    /* ch11 发给视觉的四元数 y */
+    &user_gimbal.tx_qz);   /* ch12 发给视觉的四元数 z */
 }
 
 
@@ -243,6 +262,7 @@ void ChassisControl_Init(Chassis* chassis, DBUS_DRIVES* dbus) {
     s_mode = CHASSIS_MODE_MANUAL;
     s_offline_ms = 0;
     s_prev_sw1 = 0;
+    s_prev_auto = 0;
     s_heading_src = ChassisControl_NoHeading;
     s_source_valid = ChassisControl_SourceAlwaysValid;
 
@@ -312,8 +332,24 @@ void ChassisControl_Update(void) {
         return;
     }
 
-    /* 拨杆切模式：上=跟随 中=手动 下=小陀螺 */
-    if (s_dbus->sw1 != s_prev_sw1) {
+    /* ★★ sw1（左上角拨杆）是【双语义拨杆】，语义由 yaw_auto 决定：
+         yaw_auto = 0 -> sw1 归【底盘】：上=跟随 中=手动 下=小陀螺（就是下面这套映射）
+         yaw_auto = 1 -> sw1 归【射击】：上=摩擦轮开（见 shooter.c 的 arm 总闸），
+                         底盘模式不再由 sw1 决定
+       ⚠️ 所以【跟随模式只能在 yaw_auto=0 时使用】；自瞄期间若已处于跟随，立即退回手动。
+       ⚠️ 刚退出自瞄时要强制重新解析一次 sw1（left_auto），否则拨杆没动过、模式会卡在手动。 */
+    const uint8_t auto_on   = (user_gimbal.yaw_auto >= 0.5f) ? 1 : 0;
+    const uint8_t left_auto = ((s_prev_auto != 0u) && (auto_on == 0u)) ? 1 : 0;
+    s_prev_auto = auto_on;
+
+    if (auto_on) {
+        /* 自瞄接手：跟随模式不可用 -> 强制回手动；小陀螺仍允许（视觉控 yaw、底盘自转互不冲突）*/
+        if (s_mode == CHASSIS_MODE_FOLLOW) {
+            s_mode = CHASSIS_MODE_MANUAL;
+            Heading_Pid_Reset();
+            s_w_cmd = 0.0f;
+        }
+    } else if ((s_dbus->sw1 != s_prev_sw1) || left_auto) {
         if (s_dbus->sw1 == 1) {
             s_mode = CHASSIS_MODE_FOLLOW;
         } else if (s_dbus->sw1 == 2) {

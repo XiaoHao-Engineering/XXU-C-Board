@@ -311,9 +311,20 @@ static void Shooter_Update(void* arg) {
     const uint8_t sw2 = user_dbus.sw2;
     const float wheel = (float)user_dbus.roll;
 
-    /* ★★ 总闸：yaw_auto（在线 yaw_auto=1# 打开自瞄）。
-       < 0.5 = 摩擦轮 + 拨弹盘全部失能，不管 sw2 在哪 */
-    const uint8_t arm = (user_gimbal.yaw_auto >= 0.5f) ? 1 : 0;
+    /* ★★ 总闸（两道，缺一不可）：
+         ① yaw_auto >= 0.5：自瞄已开启（在线 yaw_auto=1#）
+         ② sw1 == 上      ：左上角拨杆拨到"上" = 允许摩擦轮起转
+       任一不满足 -> 摩擦轮 + 拨弹盘全部失能，不管 sw2 在哪。
+       ⚠️ yaw_auto=0 时 sw1 归底盘做模式选择（上=跟随），此时这道闸必然关死，
+          所以"跟随模式"和"摩擦轮"共用 sw1 的上档，但永不同时生效。 */
+    const uint8_t sw1 = user_dbus.sw1;
+#if SHOOTER_SW1_GATE_ENABLE
+    const uint8_t sw1_friction_on = (sw1 == SHOOTER_SW1_FRICTION_ON) ? 1 : 0;
+#else
+    const uint8_t sw1_friction_on = 1;   /* 排错：绕开 sw1 这道闸，回到只看 yaw_auto 的旧行为 */
+    (void)sw1;
+#endif
+    const uint8_t arm = ((user_gimbal.yaw_auto >= 0.5f) && sw1_friction_on) ? 1 : 0;
 
     /* sw2 -> 模式：上(1)=单发 下(2)=连发 中(3)=仅摩擦轮。
        0/其它（遥控没数据/野值）按"仅摩擦轮"处理，绝不乱拨弹 */
