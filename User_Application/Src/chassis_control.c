@@ -468,6 +468,14 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     /* ★★★ 陀螺零偏在线跟踪系数（治"不动摇杆也隔几秒飘一次"）。填 0 = 关闭，可做 A/B 对比。
        默认 0.0002（1kHz 下 τ=5s）。它只在【摇杆居中 + 编码器没动】时工作。 */
     {"gimbal_bias_k", &user_gimbal.bias_k, 0.0f, 0.01f, NULL},
+    /* ★★ 上电静态零偏标定（状态机在 gimbal.c 的 Gimbal_Calib_Update，结果看
+       user_gimbal.calib_state / calib_gyro_avg / calib_gyro_pp）：
+         calib_ms      采样窗口 ms（500~5000，默认 2000）。改它只影响【下一次】标定，
+                       本次采样开始时就已锁存到 calib_target_ms。
+         calib_restart 写 1 立刻重新标定（状态回 IDLE，重新等加热/静止 200ms），
+                       固件内部消费后自动清 0。标定期间别碰云台/底盘。 */
+    {"calib_ms",      &user_gimbal.calib_ms_cfg, GIMBAL_CALIB_MS_MIN, GIMBAL_CALIB_MS_MAX, NULL},
+    {"calib_restart", &user_gimbal.calib_restart, 0.0f, 1.0f, NULL},
     /* ---- PID 测试波形（调内环用）：wave_en=1 后波形直接当转速指令，绕过外环
        wave_type: 0=HOLD 1=STEP 2=SQUARE 3=SINE 4=TRIANGLE 5=SAW */
     {"wave_en",   &user_gimbal.wave_en,   0.0f,   1.0f, Gimbal_Wave_Apply},

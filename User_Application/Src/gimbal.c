@@ -18,6 +18,10 @@ static void  Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal);
 static float Gimbal_Wrap180(float deg);
 static float Gimbal_Stick(int16_t value, float dead);
 static int16_t Gimbal_RC_Channel(uint8_t ch);
+#if GIMBAL_LOCK_WORLD && GIMBAL_IMU_ON_GIMBAL
+static void  Gimbal_Calib_Update(GIMBAL_DRIVES* gimbal, float stick);
+static void  Gimbal_Calib_Clear_Window(GIMBAL_DRIVES* gimbal);
+#endif
 
 void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->yaw_motor = yaw_motor;
@@ -49,6 +53,24 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->bias_k = GIMBAL_BIAS_TRACK_ALPHA;
     gimbal->enc_rate_lpf = 0.0f;
     gimbal->enc_last = 0.0f;
+
+    /* 上电静态零偏标定（见 gimbal.h 的 GIMBAL_CALIB_* 和本文件的 Gimbal_Calib_Update）：
+       状态机从 IDLE 起，每次上电只成功标定一次；calib_restart=1 可随时重来。 */
+    gimbal->calib_state = GIMBAL_CALIB_IDLE;
+    gimbal->calib_ms = 0U;
+    gimbal->calib_gyro_avg = 0.0f;
+    gimbal->calib_gyro_pp = 0.0f;
+    gimbal->calib_gyro_std = 0.0f;
+    gimbal->calib_ms_cfg = (float)GIMBAL_CALIB_MS;
+    gimbal->calib_restart = 0.0f;
+    gimbal->calib_target_ms = (uint16_t)GIMBAL_CALIB_MS;
+    gimbal->calib_timeout_ms = 0U;
+    gimbal->calib_stable_ms = 0U;
+    gimbal->calib_n = 0U;
+    gimbal->calib_sum = 0.0f;
+    gimbal->calib_sum2 = 0.0f;
+    gimbal->calib_min = 0.0f;
+    gimbal->calib_max = 0.0f;
     gimbal->yaw_auto = GIMBAL_YAW_AUTO_DEF;
     gimbal->yaw_auto_pre = 0.0f;
     gimbal->yaw_target_ext = 0.0f;
@@ -463,6 +485,11 @@ static void Gimbal_Update(void* arg) {
         gimbal->yaw_bias += gimbal->bias_k * (user_attitude.yaw_rate - gimbal->yaw_bias);
     }
     gimbal->bias_accum += gimbal->yaw_bias * GIMBAL_DT_S;
+
+    /* ★★ 上电静态零偏标定：放在在线跟踪 + 积分【之后】，这样标定完成的那一拍
+       可以把 bias_accum 精确清 0（紧接着的下一拍才重新开始积分）。
+       ★ 它只写 yaw_bias / bias_accum 和 calib_* 字段，不碰 PID / 限位 / 回位 / 视觉参数。 */
+    Gimbal_Calib_Update(gimbal, stick);
 #endif
 
 #if GIMBAL_WAVE_ENABLE
@@ -578,6 +605,191 @@ static void Gimbal_Update(void* arg) {
     gimbal->yaw_motor->Set_Motor_State(gimbal->yaw_motor, gimbal->target_speed);
 #endif
 }
+
+/* ================= ★★ 上电静态零偏标定（yaw） =================
+   状态机（每拍在 1kHz 的 Gimbal_Update 里调用一次，不新建任务）：
+
+     IDLE --(user_heater 预热到 47℃ / 或加热被关掉)--> WAIT
+     WAIT --(静止条件连续满足 GIMBAL_CALIB_STABLE_MS)--> COLLECTING
+     COLLECTING --(采够 calib_ms)--> DONE：yaw_bias = 平均零偏(deg/s)，bias_accum = 0
+     COLLECTING --(静止条件被破坏 / 云台掉线)--> WAIT：清空累加，重新等 200ms
+     WAIT/COLLECTING --(从加热就绪起累计 10s)--> TIMEOUT：放弃，在线跟踪兜底
+
+   ★ 进入采样的前置条件（全部满足）：
+     ① 加热：user_heater.preheat_done != 0（预热到 47℃ 以上）；若 user_heater.enabled == 0
+        （台架关加热）则跳过这一条；
+     ② 云台：gimbal->is_online && gimbal->is_aligned（yaw GM6020 在线且已对齐）；
+     ③ 传感器：BMI088 在线且它自己的上电 1000 点标定已完成（否则 gyro[] 还没更新，采到的是 0）；
+     ④ 静止：stick == 0、|enc_rate_lpf| < GIMBAL_BIAS_ENC_MAX_RATE、|gyro_z| < GIMBAL_CALIB_GYRO_MAX_DPS。
+   ★ 单位：gyro_z 是 rad/s，乘 GIMBAL_RAD2DEG 变成 deg/s 再累加/写入 yaw_bias；
+     yaw_bias(deg/s) × 0.001 = bias_accum(deg)，位置环用 wrap(imu_yaw(deg) − bias_accum(deg))。
+   ★ bias_k 不关：标定只给它一个更准的起点，之后仍按原来的"摇杆居中 + 编码器没动"在线微调。 */
+#if GIMBAL_LOCK_WORLD && GIMBAL_IMU_ON_GIMBAL
+
+/* 清空"这一次采样"的累加量（不动 calib_state / calib_timeout_ms / calib_ms_cfg）*/
+static void Gimbal_Calib_Clear_Window(GIMBAL_DRIVES* gimbal) {
+    gimbal->calib_ms = 0U;
+    gimbal->calib_stable_ms = 0U;
+    gimbal->calib_n = 0U;
+    gimbal->calib_sum = 0.0f;
+    gimbal->calib_sum2 = 0.0f;
+    gimbal->calib_min = 0.0f;
+    gimbal->calib_max = 0.0f;
+}
+
+static void Gimbal_Calib_Update(GIMBAL_DRIVES* gimbal, const float stick) {
+    /* ① 加热条件：预热完成，或人为关掉加热（台架调试直接允许标定）*/
+    const uint8_t heater_ok = (user_heater.enabled == 0.0f) || (user_heater.preheat_done != 0);
+
+    /* ② 云台在线且已对齐；③ IMU 在线且完成它自己的上电标定（见 user_bmi088.c）*/
+    const uint8_t gimbal_ok = (gimbal->is_online != 0U) && (gimbal->is_aligned != 0U);
+    const uint8_t sensor_ok = (user_bmi088.is_online != 0U) && (user_bmi088.calibrated != 0U);
+
+    /* ④ 静止：摇杆居中 + 编码器角速度小 + 陀螺角速度小。
+       ★ gyro_z 先换成 deg/s 再和阈值比：阈值宏是按 deg/s 标定的。 */
+    const float gz_dps = user_bmi088.gyro[2] * GIMBAL_RAD2DEG;
+    const uint8_t still = (stick == 0.0f)
+                       && (fabsf(gimbal->enc_rate_lpf) < GIMBAL_BIAS_ENC_MAX_RATE)
+                       && (fabsf(gz_dps) < GIMBAL_CALIB_GYRO_MAX_DPS);
+    const uint8_t ready = (heater_ok != 0U) && (gimbal_ok != 0U)
+                       && (sensor_ok != 0U) && (still != 0U);
+
+    /* ---- 在线调参 calib_restart：写 1 触发重新标定（内部消费后清零）----
+       不清 yaw_bias / bias_accum：新标定成功前，继续用旧的零偏和在线跟踪，绝不突然失去修正。 */
+    if (gimbal->calib_restart > 0.5f) {
+        gimbal->calib_restart = 0.0f;
+        gimbal->calib_state = GIMBAL_CALIB_IDLE;
+        gimbal->calib_timeout_ms = 0U;
+        gimbal->calib_gyro_avg = 0.0f;
+        gimbal->calib_gyro_pp = 0.0f;
+        gimbal->calib_gyro_std = 0.0f;
+        Gimbal_Calib_Clear_Window(gimbal);
+    }
+
+    /* DONE / TIMEOUT 是终态：不再自动重来（否则每次摇杆回中都会重新标一遍）。
+       要再标一次就把 calib_restart 写 1。 */
+    if ((gimbal->calib_state == GIMBAL_CALIB_DONE)
+        || (gimbal->calib_state == GIMBAL_CALIB_TIMEOUT)) {
+        return;
+    }
+
+    /* ---- 预热阶段：保持 IDLE，也不计 10s 超时 ----
+       ★ 超时必须从"加热就绪"起算：IMU 从室温烧到 47℃ 通常远超 10s，
+         若从上电就计时，真实车上会 100% 走到 TIMEOUT，这个功能等于没用。 */
+    if (heater_ok == 0U) {
+        gimbal->calib_state = GIMBAL_CALIB_IDLE;
+        Gimbal_Calib_Clear_Window(gimbal);
+        return;
+    }
+
+    /* 加热就绪：第一次进入 WAIT 时开始 10s 计时 */
+    if (gimbal->calib_state == GIMBAL_CALIB_IDLE) {
+        gimbal->calib_state = GIMBAL_CALIB_WAIT;
+        gimbal->calib_timeout_ms = 0U;
+        gimbal->calib_stable_ms = 0U;
+    }
+
+    /* ---- 总超时：10s 内没成功就放弃，靠已有的在线跟踪兜底 ----
+       ★ 期间被碰/云台掉线导致的重来也算在这 10s 里（需求：总共等 10 秒）。*/
+    if (gimbal->calib_timeout_ms < GIMBAL_CALIB_TIMEOUT_MS) {
+        gimbal->calib_timeout_ms++;
+        if (gimbal->calib_timeout_ms >= GIMBAL_CALIB_TIMEOUT_MS) {
+            gimbal->calib_state = GIMBAL_CALIB_TIMEOUT;
+            Gimbal_Calib_Clear_Window(gimbal);
+            return;
+        }
+    }
+
+    if (gimbal->calib_state == GIMBAL_CALIB_WAIT) {
+        /* 静止条件要连续满足 200ms 才开始采样，避开刚上电/刚加热完的抖动 */
+        if (ready != 0U) {
+            if (gimbal->calib_stable_ms < GIMBAL_CALIB_STABLE_MS) {
+                gimbal->calib_stable_ms++;
+            }
+            if (gimbal->calib_stable_ms >= GIMBAL_CALIB_STABLE_MS) {
+                /* 锁存本次采样时长：采样中途在线改 calib_ms 只影响下一次，不会让本次突然结束 */
+                float target_ms = gimbal->calib_ms_cfg;
+                if (!(target_ms >= GIMBAL_CALIB_MS_MIN)) {   /* 同时挡住 NaN */
+                    target_ms = GIMBAL_CALIB_MS_MIN;
+                }
+                if (target_ms > GIMBAL_CALIB_MS_MAX) {
+                    target_ms = GIMBAL_CALIB_MS_MAX;
+                }
+                gimbal->calib_target_ms = (uint16_t)target_ms;
+
+                Gimbal_Calib_Clear_Window(gimbal);
+                gimbal->calib_state = GIMBAL_CALIB_COLLECTING;
+            }
+        } else {
+            /* 静止条件被破坏（有人碰/推杆/云台掉线）：重新等 200ms */
+            gimbal->calib_stable_ms = 0U;
+        }
+        return;
+    }
+
+    /* ---- COLLECTING ----
+       中途只要"静止条件"或在线状态被破坏，就清空累加、退回 WAIT 重新等 200ms。
+       这样平均窗口里绝不会混进碰云台/转底盘的样本。 */
+    if (ready == 0U) {
+        gimbal->calib_state = GIMBAL_CALIB_WAIT;
+        Gimbal_Calib_Clear_Window(gimbal);
+        return;
+    }
+
+    gimbal->calib_sum += gz_dps;
+    gimbal->calib_sum2 += gz_dps * gz_dps;
+    if ((gimbal->calib_n == 0U) || (gz_dps < gimbal->calib_min)) {
+        gimbal->calib_min = gz_dps;
+    }
+    if ((gimbal->calib_n == 0U) || (gz_dps > gimbal->calib_max)) {
+        gimbal->calib_max = gz_dps;
+    }
+    gimbal->calib_n++;
+    gimbal->calib_ms++;
+
+    if (gimbal->calib_ms >= gimbal->calib_target_ms) {
+        const float n_f = (float)gimbal->calib_n;
+        const float avg = gimbal->calib_sum / n_f;
+        float var = (gimbal->calib_sum2 / n_f) - (avg * avg);
+        if (var < 0.0f) {
+            var = 0.0f;      /* 浮点误差可能让方差差一点点变负 */
+        }
+        const float std = sqrtf(var);
+
+        /* 传感器读飞（NaN/Inf）时绝不能把野值写进 yaw_bias —— 那会直接毁掉位置环反馈。
+           丢掉这次窗口、回 WAIT 重来；若一直坏，10s 超时会把它变成 TIMEOUT。 */
+        if (!isfinite(avg) || !isfinite(std) || !isfinite(gimbal->calib_min)
+            || !isfinite(gimbal->calib_max)) {
+            gimbal->calib_state = GIMBAL_CALIB_WAIT;
+            Gimbal_Calib_Clear_Window(gimbal);
+            return;
+        }
+
+        gimbal->calib_gyro_avg = avg;                              /* deg/s */
+        gimbal->calib_gyro_pp  = gimbal->calib_max - gimbal->calib_min;  /* deg/s */
+        gimbal->calib_gyro_std = std;                              /* deg/s */
+
+        /* ★★★ 写入零偏 + bias_accum 归零 ---------------------------------------------
+           ★ 为什么还要平移目标角：bias_accum 是【位置环反馈】的一部分，
+             world_yaw = wrap(imu_yaw − bias_accum)。把它直接清 0，反馈会瞬间增大
+             old_accum（预热几分钟里在线跟踪可能已经积了 1~5°），位置环就会让云台
+             物理上转一个小角度去"追"这个阶跃 —— 表现成"标定一完成云台自己动一下"。
+             世界系整体平移 +old_accum、目标角同步平移，误差不变 ⇒ 没有任何物理动作。
+             推导：W_old = imu − A，W_new = imu = W_old + A；
+                   要 (T_new − W_new) == (T_old − W_old)，得 T_new = T_old + A。
+           ★ 平移的只是"世界系角度的基准"，不动 PID/增益/限位/回位/cam_*_off。 */
+        const float old_accum = gimbal->bias_accum;
+        gimbal->target_yaw = Gimbal_Wrap180(gimbal->target_yaw + old_accum);
+        gimbal->target_yaw_smooth = Gimbal_Wrap180(gimbal->target_yaw_smooth + old_accum);
+        gimbal->yaw_target_ext = Gimbal_Wrap180(gimbal->yaw_target_ext + old_accum);
+
+        gimbal->yaw_bias = avg;       /* deg/s：与 user_attitude.yaw_rate / imu_yaw 同一单位链 */
+        gimbal->bias_accum = 0.0f;    /* 从现在开始重新积分；bias_k 保持不变，继续在线微调 */
+        gimbal->calib_state = GIMBAL_CALIB_DONE;
+    }
+}
+
+#endif /* GIMBAL_LOCK_WORLD && GIMBAL_IMU_ON_GIMBAL */
 
 /* 1kHz：pitch 角度环。串级模式下外环在电机内部跑，这里只管掉线保护 + 角度标定 + 遥控给目标 + 软限位 */
 static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {

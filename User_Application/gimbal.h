@@ -17,6 +17,11 @@
    ★ 只给【观测/绘图镜像】用；云台控制内部（target_yaw / 编码器角 / PID / 限位 / 回位 /
      cam_yaw_off / cam_pitch_off）全部按【度】标定，不要拿它去改任何控制量。 */
 #define GIMBAL_DEG2RAD          (0.017453292519943295f)
+/* ★ 弧度 -> 度（180/π）。只用于把【传感器原始单位 rad/s】换算成工程内部的 deg/s：
+   BMI088 的 user_bmi088.gyro[] 是 rad/s，而 yaw_bias / bias_accum / imu_yaw / yaw_rate
+   这条链全部按【度】标定（见 gimbal.h 里零偏在线跟踪那一段与 gimbal.c 的静态标定）。
+   静态零偏标定必须用它，不能直接把 rad/s 写进 yaw_bias。 */
+#define GIMBAL_RAD2DEG          (57.29577951308232f)
 
 #define GIMBAL_YAW_MOTOR_ID     (1)          /* GM6020 的 CAN ID (1~7) */
 #define GIMBAL_YAW_ZERO_DEG     (0.0f)       /* 云台正对底盘前方时的电机多圈角度 */
@@ -119,6 +124,31 @@
                                                   ⚠️ 必须远大于零偏爬行速率(0.05)，否则门控把自己关死 */
 #define GIMBAL_ENC_RATE_ALPHA       (0.002f)   /* 编码器角速度低通（1kHz 下 τ≈0.5s）：
                                                   压掉整数计数 0.044deg/count 的量化噪声 */
+
+/* ★★★ 上电静态零偏标定（Gimbal_Calib_Update，1kHz 云台任务里跑，不新建任务）------------
+   为什么还要它：上面的在线跟踪是 τ=5s 的低通，且只在"摇杆居中 + 编码器没动"时才更新；
+   上电后 IMU 从冷态被加热到 50℃，热漂移会让零偏在几分钟内一直变，在线跟踪只能慢慢追。
+   所以【加热到 47℃（preheat_done）后、云台静止时】做一次 2s 的静态采样，把 gyro_z 的
+   平均值直接标成 yaw_bias，再让在线跟踪在它上面继续微调（bias_k 不关）。
+   单位链（必须保持）：gyro_z[rad/s] × GIMBAL_RAD2DEG = deg/s -> yaw_bias[deg/s]
+                      -> bias_accum[deg] += yaw_bias × 0.001 -> imu_yaw[deg] − bias_accum[deg]。
+   若加热被关掉（user_heater.enabled==0，台架调试），跳过加热条件直接允许标定。 */
+#define GIMBAL_CALIB_MS             (2000U)    /* 默认采样窗口 ms（在线调参 calib_ms 可改 500~5000）*/
+#define GIMBAL_CALIB_TIMEOUT_MS     (10000U)   /* ★ 从"加热就绪"起累计 10s 还没标定成功就放弃，
+                                                  交给在线跟踪兜底。预热阶段不计时，否则 47℃ 都到不了 */
+#define GIMBAL_CALIB_STABLE_MS      (200U)     /* 静止条件要连续满足这么久才开始采样（去抖）*/
+/* "静止"的陀螺阈值 deg/s：BMI088（1kHz/116Hz 带宽）静止噪声约 0.1~0.2deg/s rms，
+   取 1.0 约 5~10σ，既不会把噪声当转动，也能挡住手碰/转底盘。单位 deg/s！ */
+#define GIMBAL_CALIB_GYRO_MAX_DPS   (1.0f)
+#define GIMBAL_CALIB_MS_MIN         (500.0f)   /* 在线调参下限（与 chassis_control.c 调参表一致）*/
+#define GIMBAL_CALIB_MS_MAX         (5000.0f)  /* 在线调参上限 */
+
+/* GIMBAL_DRIVES.calib_state 取值（与需求一一对应，不要改数值）*/
+#define GIMBAL_CALIB_IDLE           (0U)       /* 等加热（preheat_done）*/
+#define GIMBAL_CALIB_WAIT           (1U)       /* 加热 OK，等"静止条件"连续 200ms */
+#define GIMBAL_CALIB_COLLECTING     (2U)       /* 正在采样 calib_target_ms */
+#define GIMBAL_CALIB_DONE           (3U)       /* 标定完成，yaw_bias 已写入、bias_accum 已归零 */
+#define GIMBAL_CALIB_TIMEOUT        (4U)       /* 10s 超时，放弃（在线跟踪兜底）*/
 
 /* ---- 锁世界位置环（抗惯性三件套）------------------------------------------
    外环是"角度误差 -> 转速目标"，1 RPM = 6 deg/s，所以开环时间常数 τ ≈ 6/world_kp 秒。
@@ -472,6 +502,29 @@ typedef struct {
     float tx_qz;
     float yaw_fb_rad;    /* ch7 的弧度镜像 = yaw_fb × GIMBAL_DEG2RAD（仅供绘图观测）*/
     float yaw_rad;       /* ch8 的弧度镜像 = yaw    × GIMBAL_DEG2RAD（仅供绘图观测）*/
+
+    /* ---- ★★ 上电静态零偏标定（状态机见 gimbal.c 的 Gimbal_Calib_Update，跑在 1kHz 云台任务里）
+       ★ 单位：calib_gyro_avg / pp / std 全部是【deg/s】（gyro_z 已经乘过 GIMBAL_RAD2DEG），
+         和 yaw_bias 同单位；不要把它们当 rad/s 用。
+       ★ calib_ms 是【本次采样已经采了多久】（COLLECTING 时 0..calib_target_ms，DONE 时=N），
+         采样时长设定值是 calib_ms_cfg（在线调参名就叫 calib_ms，调参表只收 float*）。*/
+    uint8_t  calib_state;      /* 0=IDLE 1=WAIT 2=COLLECTING 3=DONE 4=TIMEOUT（GIMBAL_CALIB_*）*/
+    uint16_t calib_ms;         /* 本次采样已进行 ms（观测用）*/
+    float    calib_gyro_avg;   /* 标定得到的 gyro_z 平均零偏 deg/s（= 写入 yaw_bias 的值）*/
+    float    calib_gyro_pp;    /* 采样窗口内 gyro_z 峰峰值 deg/s（越小说明越静止）*/
+    float    calib_gyro_std;   /* 采样窗口内 gyro_z 标准差 deg/s（比峰峰值抗单点野值）*/
+    /* ---- 在线可调（chassis_control.c 调参表只收 float*）---- */
+    float    calib_ms_cfg;     /* 采样时长设定 ms（调参名 calib_ms，500~5000）*/
+    float    calib_restart;    /* 调参名 calib_restart：写 1 触发重新标定，内部消费后清零 */
+    /* ---- 状态机内部量（观测/排错用，不需要在线调）---- */
+    uint16_t calib_target_ms;  /* 进入 COLLECTING 时锁存的采样时长 ms（改 calib_ms 只影响下一次）*/
+    uint16_t calib_timeout_ms; /* 加热就绪后累计的等待/采样时间 ms（GIMBAL_CALIB_TIMEOUT_MS）*/
+    uint16_t calib_stable_ms;  /* "静止条件"连续满足 ms（GIMBAL_CALIB_STABLE_MS 去抖）*/
+    uint16_t calib_n;          /* 已采集样本数 */
+    float    calib_sum;        /* Σ gyro_z deg/s */
+    float    calib_sum2;       /* Σ gyro_z² (deg/s)² */
+    float    calib_min;        /* 窗口内最小 gyro_z deg/s */
+    float    calib_max;        /* 窗口内最大 gyro_z deg/s */
 } GIMBAL_DRIVES;
 
 void  Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor);
