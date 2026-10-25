@@ -1068,7 +1068,7 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
 
     /* 全部通过：这是【唯一】写视觉目标的地方（拒绝路径绝不写，见函数头说明）*/
     gimbal->yaw_target_ext   = yaw_ext;
-    gimbal->pitch_target_ext = pitch_ext;
+    gimbal->pitch_target_ext = GIMBAL_VISION_PITCH_SIGN * pitch_ext;
     /* 角速度前馈：系数 × 视觉目标角速度（参考 0.5 / 0.6），到速度环前再 /6 换算成 RPM */
     gimbal->aim_rate       = raw_yaw_vel * VISION_PKG2DEG * gimbal->aim_ff_gain;
     gimbal->pitch_aim_rate = raw_pitch_vel * VISION_PKG2DEG * gimbal->aim_ff_gain_pitch;
