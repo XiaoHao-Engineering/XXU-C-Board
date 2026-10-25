@@ -1085,14 +1085,23 @@ static void Gimbal_Aim_Release(GIMBAL_DRIVES* gimbal) {
     gimbal->aim_ok_f = 0.0f;
 }
 
-/* 退出接管：放掉使能开关、回摇杆控制，要求操作手重新打开。
-   ★ 不自动恢复是故意的：野值/丢失通常是持续性的（目标真的没了、或跟踪错了），
-     自动恢复会形成"接管→甩一下→退出→再接管"的抖动，比干脆交还给操作手更危险。
-     排错看 aim_reject_cnt（累计拒绝帧数）与 aim_bad_frames（连续无效帧数）。*/
+/* 退出接管：只【放掉接管】、把云台交回摇杆 —— 绝不动操作手的使能开关 yaw_auto。
+   ★★★ 为什么【不】清 yaw_auto（BUG 修复，2026-10-25）：
+     ① yaw_auto 是操作手的开关（在线 yaw_auto=1#），不是视觉的状态位。视觉一掉线/一给野值
+        就把它清 0，操作手每次都得重新发命令，手感像"自瞄自己会掉"；
+     ② 它还是发射机构的【总闸之一】（shooter.c: arm = (yaw_auto >= 0.5) && sw1 上），
+        清掉 yaw_auto 会连累摩擦轮/拨弹一起失能 —— 视觉抖一帧就把枪断电，风险更大；
+     ③ 它同时是给视觉回传的握手（gimbal.c 里 Vision_Set_Tx_Mode 看 yaw_auto）：
+        清 0 会回 IDLE，视觉侧可能就不再发 mode=1/2 的控制包，反而更难恢复。
+   ★ 现在视觉侧的一切异常（离线超时 / 连续野值）只影响【接管】：aim_takeover=0，
+     云台本拍就交回摇杆；yaw_auto 保持操作手设定的值，视觉恢复有效帧即自动重新接管。
+   ★ 重新接管时目标角以【当前角度】为起点（Gimbal_Aim_Update 的"接管瞬间"那一段），
+     所以不会朝一个陈旧目标猛甩 —— 自动恢复是安全的。
+   ★ 真正"关掉自瞄"只剩操作手自己的动作：yaw_auto=0#（参数表直写，见 chassis_control.c）。
+   排错看 aim_reject_cnt（累计拒绝帧数）与 aim_bad_frames（连续无效帧数）。*/
 static void Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal) {
-    Gimbal_Aim_Release(gimbal);
-    gimbal->yaw_auto = 0.0f;
-    gimbal->aim_bad_frames = 0;
+    Gimbal_Aim_Release(gimbal);     /* aim_takeover = 0：本拍立刻交回摇杆（安全行为，必须保留）*/
+    gimbal->aim_bad_frames = 0;     /* 重新计连续无效帧，避免同一帧野值反复触发 */
 }
 
 static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
@@ -1128,11 +1137,13 @@ static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
 
     /* 闸②-b 视觉离线：不接管，回摇杆（保持原来的摇杆/编码器控制）。
        短丢帧（< aim_timeout_ms）只是这一拍交还摇杆，云台目标不会跳（接管时重新以
-       当前角度为起点）；连续超过 aim_timeout_ms 仍无有效帧 -> 判"视觉真的没了"，退出接管。*/
+       当前角度为起点）；连续超过 aim_timeout_ms 仍无有效帧 -> 判"视觉真的没了"，退出接管。
+       ★ 两条路径都【只释放接管】，不碰 yaw_auto：操作手的开关不能被视觉的掉线改掉
+         （BUG 修复，见 Gimbal_Aim_Abort 上面那段说明）。*/
     if (Vision_Is_Online(&user_vision) == 0) {
         Gimbal_Aim_Release(gimbal);
         if ((uint32_t)(now - gimbal->aim_ms) > (uint32_t)gimbal->aim_timeout_ms) {
-            Gimbal_Aim_Abort(gimbal);
+            Gimbal_Aim_Abort(gimbal);   /* 与 Release 的区别只剩"清连续无效帧计数"*/
         }
         return;
     }
@@ -1176,7 +1187,9 @@ static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
     gimbal->pitch_aim_rate = 0.0f;
     gimbal->aim_ok_f = 0.0f;
 
-    /* 闸⑥ 连续若干帧都无效 -> 退出接管、回摇杆控制（要求操作手重新打开自瞄）*/
+    /* 闸⑥ 连续若干帧都无效 -> 退出接管、回摇杆控制。
+       ★ 同样【不清 yaw_auto】：野值只说明"这一段时间的视觉数据不能信"，不代表
+         操作手要关自瞄。清掉会形成"操作手重发 → 再被野值清掉"的死循环（BUG 修复）。*/
     if (gimbal->aim_bad_frames >= GIMBAL_AIM_INVALID_LIMIT) {
         Gimbal_Aim_Abort(gimbal);
     }
