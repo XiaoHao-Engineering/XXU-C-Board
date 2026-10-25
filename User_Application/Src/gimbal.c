@@ -95,6 +95,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->aim_takeover = 0.0f;
     gimbal->aim_bad_frames = 0;
     gimbal->aim_reject_cnt = 0;
+    gimbal->aim_need_ok = 0;
     gimbal->last_vision_frame = 0;
     gimbal->last_dbus_count = 0;
     gimbal->dbus_offline_ms = 0;
@@ -1071,6 +1072,10 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
     /* 角速度前馈：系数 × 视觉目标角速度（参考 0.5 / 0.6），到速度环前再 /6 换算成 RPM */
     gimbal->aim_rate       = raw_yaw_vel * VISION_PKG2DEG * gimbal->aim_ff_gain;
     gimbal->pitch_aim_rate = raw_pitch_vel * VISION_PKG2DEG * gimbal->aim_ff_gain_pitch;
+    /* ★ 一帧通过全部闸门的有效数据 = "视觉恢复正常"的证据：解除闸⑥的重新接管锁存。
+       注意只清这个锁存，不在这里动 aim_takeover —— 是否接管由 Gimbal_Aim_Update 的
+       统一入口判定（下一拍起允许），避免绕开闸②的在线/mode 判断。 */
+    gimbal->aim_need_ok   = 0;
     return 1;
 }
 
@@ -1102,6 +1107,12 @@ static void Gimbal_Aim_Release(GIMBAL_DRIVES* gimbal) {
 static void Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal) {
     Gimbal_Aim_Release(gimbal);     /* aim_takeover = 0：本拍立刻交回摇杆（安全行为，必须保留）*/
     gimbal->aim_bad_frames = 0;     /* 重新计连续无效帧，避免同一帧野值反复触发 */
+    /* ★★ 锁存"必须再来一帧通过全部闸门的有效数据才允许重新接管"。
+       没有它：Abort 只 Release，下一拍 yaw_auto && 在线 && mode!=0 会立刻重新置
+       aim_takeover=1，而 aim_valid=0 又走"丢帧冻结"分支 —— 视觉持续发野值时摇杆只有
+       每 ~50ms 中的 1ms 能控制 yaw（操作手抢不动）。锁存后野值期间云台一直听摇杆，
+       视觉恢复给出一帧合格数据时由 Gimbal_Aim_Accept_Frame 清 0，自动重新接管。 */
+    gimbal->aim_need_ok = 1;
 }
 
 static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
@@ -1156,8 +1167,15 @@ static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
         return;
     }
 
-    /* 接管条件齐了：使能 && 在线 && mode != NO_CONTROL（参考 ita_robot.cpp:639 同款）*/
-    gimbal->aim_takeover = 1.0f;
+    /* 接管条件齐了：使能 && 在线 && mode != NO_CONTROL（参考 ita_robot.cpp:639 同款）
+       ★★ 新增一道"重新接管许可"：被闸⑥（连续野值）中止过时 aim_need_ok=1，此时即使
+          在线/mode 已恢复也【不】接管，必须等一帧真正通过全部闸门的有效视觉数据
+          （Gimbal_Aim_Accept_Frame 成功末尾清 0）。这样野值期间云台老老实实听摇杆，
+          视觉恢复后自动重新接管，不需要操作手干预。其余释放路径（未使能/离线/mode==0）
+          仍走各自的 Gimbal_Aim_Release，不经过这个锁存。 */
+    if (gimbal->aim_need_ok == 0) {
+        gimbal->aim_takeover = 1.0f;
+    }
 
     /* ★ 只有【新的一帧】才做校验与计数：控制任务是 1kHz，视觉约 100Hz，
        否则一帧之间会被误判成"连续多帧无效"而误退出。没有新帧就沿用上一帧的结论

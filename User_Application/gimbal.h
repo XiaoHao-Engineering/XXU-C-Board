@@ -443,6 +443,13 @@ typedef struct {
     float    aim_takeover;      /* 观察用：1=本拍由视觉接管（yaw/pitch 共用同一帧判定）*/
     uint16_t aim_bad_frames;    /* 连续被闸门拒绝的视觉帧数（到限就退出接管）*/
     uint32_t aim_reject_cnt;    /* 累计被闸门拒绝的帧数（排错用，只增不减）*/
+    /* ★★ 重新接管许可（闸⑥中止后的"锁存"）：1 = 被 Gimbal_Aim_Abort() 中止过，
+       此时即使 yaw_auto/视觉在线/mode 全部恢复正常也【不】立刻重新接管，
+       必须等到一帧真正通过全部闸门的有效视觉数据（Gimbal_Aim_Accept_Frame 成功末尾清 0）。
+       没有它时：连续 5 帧野值 -> Abort 只 Release -> 下一拍 yaw_auto&&在线&&mode!=0 又立刻
+       接管，而 aim_valid=0 走"丢帧冻结"分支 -> 每 ~50ms 只有 1ms 给摇杆，操作手抢不动 yaw。
+       有了它：视觉发野值期间云台老实听摇杆；视觉恢复正常给出一帧合格数据后自动重新接管。 */
+    uint8_t  aim_need_ok;
     uint32_t last_vision_frame; /* 上一拍见到的视觉有效帧计数（用于"是不是新的一帧"判定）*/
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */
     uint16_t dbus_offline_ms;      /* 遥控断线累计 ms */

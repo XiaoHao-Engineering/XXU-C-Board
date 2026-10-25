@@ -15,6 +15,12 @@ static const float shooter_fir_coeffs[SHOOTER_FIR_TAPS] = {
 
 static SHOOTER_DRIVES* s_shooter = NULL;
 
+/* ★ 遥控(DBUS)掉线保护的状态。本模块是单实例（s_shooter），且 shooter.h 不在本次改动范围内，
+   所以放在文件作用域：判据复用 user_dbus.rx_count（见 user_dji_bus.c:24 / gimbal.c:333），
+   本任务 1kHz 比较计数是否还在增长，不新增定时器、不占用串口绘图通道。 */
+static uint32_t s_shooter_last_dbus_count = 0;
+static uint16_t s_shooter_dbus_offline_ms = 0;
+
 static void  Shooter_Update(void* arg);
 static void  Shooter_Ballistics_Update(void* arg);
 static void  Shooter_Enter_State(SHOOTER_DRIVES* shooter, Shooter_State state);
@@ -140,6 +146,10 @@ void Shooter_Init(SHOOTER_DRIVES* shooter,
     shooter->stopper_ms = SHOOTER_STOPPER_MS;
 
     s_shooter = shooter;
+
+    /* 遥控掉线检测状态复位：重新初始化后先给满一个 SHOOTER_DBUS_OFFLINE_MS 的宽限期 */
+    s_shooter_last_dbus_count = 0;
+    s_shooter_dbus_offline_ms = 0;
 
     /* 1kHz 控制任务：只做采样/滤波/状态机/下发，绝不做弹道解算 */
     SysTick_InitTask(&shooter->task, (void*)shooter, 100, SHOOTER_PERIOD_MS,
@@ -308,23 +318,45 @@ static void Shooter_Update(void* arg) {
        tanf/cosf 在软件浮点下很慢，而本函数跑在 1ms 的 SysTick 中断里，会把整套控制饿死 */
 
     /* ---------------- 输入解析 ---------------- */
-    const uint8_t sw2 = user_dbus.sw2;
-    const float wheel = (float)user_dbus.roll;
+    /* ★★ 遥控(DBUS)在线检测（安全关键，判据复用工程既有机制）：
+       user_dji_bus.c 的 rc_callback_handler() 每收到一帧 18 字节有效包就 user_dbus.rx_count++，
+       本任务 1kHz，计数不涨就累加离线时长 —— 与 gimbal.c 判遥控/电机在线完全同一套做法。
+       ★ 不用 is_update：它会被底盘任务清零，多模块抢会丢数据（见 user_dji_bus.h:16）。
+       时间基数 = SHOOTER_PERIOD_MS（本任务周期，默认 1ms），宏是 ms。 */
+    if (user_dbus.rx_count != s_shooter_last_dbus_count) {
+        s_shooter_last_dbus_count = user_dbus.rx_count;
+        s_shooter_dbus_offline_ms = 0;
+    } else if (s_shooter_dbus_offline_ms < SHOOTER_DBUS_OFFLINE_MS) {
+        s_shooter_dbus_offline_ms =
+            (uint16_t)(s_shooter_dbus_offline_ms + SHOOTER_PERIOD_MS);
+    }
+    const uint8_t dbus_online =
+        (s_shooter_dbus_offline_ms < SHOOTER_DBUS_OFFLINE_MS) ? 1 : 0;
 
-    /* ★★ 总闸（两道，缺一不可）：
-         ① yaw_auto >= 0.5：自瞄已开启（在线 yaw_auto=1#）
-         ② sw1 == 上      ：左上角拨杆拨到"上" = 允许摩擦轮起转
+    /* ★★ 失联时【不解析】遥控字段（一律按 0）：
+       否则 sw1/sw2/roll 会一直保持最后一帧的值，sw1 停在"上"就会让摩擦轮一直转。
+       0 档对 sw1/sw2 都是"非上档"，对 roll 是"中位" -> 后面所有判定自然全部走失能分支。 */
+    const uint8_t sw2 = dbus_online ? user_dbus.sw2 : (uint8_t)0;
+    const float wheel = dbus_online ? (float)user_dbus.roll : 0.0f;
+
+    /* ★★ 总闸（三道，缺一不可）：
+         ① dbus_online    ：遥控链路在线（失联 -> 强制失能，见 shooter_config.h 的
+                            SHOOTER_DBUS_OFFLINE_MS；这是本次新增的安全闸）
+         ② yaw_auto >= 0.5：自瞄已开启（在线 yaw_auto=1#）
+         ③ sw1 == 上      ：左上角拨杆拨到"上" = 允许摩擦轮起转
        任一不满足 -> 摩擦轮 + 拨弹盘全部失能，不管 sw2 在哪。
        ⚠️ yaw_auto=0 时 sw1 归底盘做模式选择（上=跟随），此时这道闸必然关死，
           所以"跟随模式"和"摩擦轮"共用 sw1 的上档，但永不同时生效。 */
-    const uint8_t sw1 = user_dbus.sw1;
+    const uint8_t sw1 = dbus_online ? user_dbus.sw1 : (uint8_t)0;
 #if SHOOTER_SW1_GATE_ENABLE
     const uint8_t sw1_friction_on = (sw1 == SHOOTER_SW1_FRICTION_ON) ? 1 : 0;
 #else
     const uint8_t sw1_friction_on = 1;   /* 排错：绕开 sw1 这道闸，回到只看 yaw_auto 的旧行为 */
     (void)sw1;
 #endif
-    const uint8_t arm = ((user_gimbal.yaw_auto >= 0.5f) && sw1_friction_on) ? 1 : 0;
+    const uint8_t arm = (dbus_online
+                         && (user_gimbal.yaw_auto >= 0.5f)
+                         && sw1_friction_on) ? 1 : 0;
 
     /* sw2 -> 模式：上(1)=单发 下(2)=连发 中(3)=仅摩擦轮。
        0/其它（遥控没数据/野值）按"仅摩擦轮"处理，绝不乱拨弹 */
@@ -335,8 +367,13 @@ static void Shooter_Update(void* arg) {
         mode = SHOOTER_MODE_CONTINUOUS;
     }
 
-    /* 拨轮回中位 -> 重新武装（50% 回滞，防止拨轮停在死区附近抖成连发）*/
-    if (fabsf(wheel) <= shooter->fire_dead * SHOOTER_FIRE_RELEASE_RATIO) {
+    /* 拨轮回中位 -> 重新武装（50% 回滞，防止拨轮停在死区附近抖成连发）。
+       ★ 失联期间【不武装】并清掉武装位：否则断线时 wheel 被当 0（=中位）会把它武装起来，
+         而操作手可能正推着拨轮 —— 链路一恢复就会立刻打出去，不是操作手这一拍的本意。
+         恢复后必须先看到"正常的回中位帧"，再拨动才发弹。 */
+    if (!dbus_online) {
+        shooter->wheel_armed = 0;
+    } else if (fabsf(wheel) <= shooter->fire_dead * SHOOTER_FIRE_RELEASE_RATIO) {
         shooter->wheel_armed = 1;
     }
 
@@ -361,7 +398,8 @@ static void Shooter_Update(void* arg) {
 
     /* ---------------- 总闸 + 状态机 ---------------- */
     if (!arm) {
-        /* 总闸关：摩擦轮和拨弹盘全部失能 */
+        /* 总闸关（含 ★遥控失联：dbus_online=0 时 arm 恒为 0）：
+           摩擦轮目标 0、拨弹盘目标跟随实际角（不出力）、状态机回 STOP、停火 FSM 回 DISABLED */
         if (shooter->state != SHOOTER_STATE_STOP) {
             Shooter_Enter_State(shooter, SHOOTER_STATE_STOP);
         }
