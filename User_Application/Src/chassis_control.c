@@ -251,8 +251,8 @@ static void Chassis_Apply_Plot_Mode(void) {
     &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
     &user_gimbal.tx_qw,    /* ch9  发给视觉的四元数 w */
     &user_gimbal.tx_qx,    /* ch10 发给视觉的四元数 x */
-    &user_gimbal.tx_qy,    /* ch11 发给视觉的四元数 y */
-    &user_gimbal.tx_qz);   /* ch12 发给视觉的四元数 z */
+    &user_gimbal.pitch,              /* ch11 ★pitch 实际值(度) */
+    &user_gimbal.pitch_target_ext);   /* ch12 ★pitch 目标值(度) */
 }
 
 
