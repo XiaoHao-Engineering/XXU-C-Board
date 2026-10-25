@@ -70,7 +70,7 @@
    并额外加了一道【数据有效性闸门】（参考工程几乎没有无效值保护，见 GIMBAL_AIM_* 一段）。 */
 #define GIMBAL_YAW_AUTO_DEF     (0.0f)  /* 0=摇杆 1=视觉接管（在线调 yaw_auto）。★上电即开：六道保护闸同版已在，视觉离线/mode=0/NaN/越界/跳变 时完全不接管，云台照旧听摇杆 */
 #define GIMBAL_CAM_YAW_OFF       (-10.0f)  /* ★ 实测标定(2026-10-19)：准心水平居中；视觉 yaw + 本值 = 云台世界目标 */
-#define GIMBAL_CAM_PITCH_OFF     (-3.0f)   /* ★ 实测标定：准心与装甲板同高度 */
+#define GIMBAL_CAM_PITCH_OFF   (3.0f)   /* ★ 实测标定：准心与装甲板同高度 */
 /* ★★ 前馈系数与参考工程逐项对齐：
    crt_gimbal.cpp:40  Set_Yaw_Feedforward_Omega_Gain(0.5f)
    crt_gimbal.cpp:47  Set_Pitch_Feedforward_Omega_Gain(0.6f)
