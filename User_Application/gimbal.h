@@ -271,6 +271,10 @@
 /* ★ pitch 挂 CAN2 而不是 CAN1：CAN1 已有 4 轮 + yaw ≈78% 负载，再加会超出 CAN 可靠区间，
    挂 CAN2 后两条总线都留有余量。yaw(id1)/pitch(id4) 都映射 0x1FE，但分属两总线、不会互相干扰。*/
 #define GIMBAL_PITCH_CAN        user_can_2
+/* ★ 视觉 pitch 正方向与云台俯仰正方向【相反】(实测 2026-10-25：目标越近云台越往上抬，应该下压)。
+   视觉给的目标俯仰角先乘 -1 再进控制；若发现接反了改成 +1。 */
+#define GIMBAL_VISION_PITCH_SIGN   (-1.0f)
+
 #define GIMBAL_PITCH_DIR        (1.0f)       /* 角度增大方向：+1 或 -1，现场核对 */
 #define GIMBAL_PITCH_POWER_LIMIT (90.0f)
 
