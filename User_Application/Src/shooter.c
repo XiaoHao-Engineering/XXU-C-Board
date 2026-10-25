@@ -354,7 +354,7 @@ static void Shooter_Update(void* arg) {
     const uint8_t sw1_friction_on = 1;   /* 排错：绕开 sw1 这道闸，回到只看 yaw_auto 的旧行为 */
     (void)sw1;
 #endif
-    const uint8_t arm = (dbus_online
+    const uint8_t arm = ((SHOOTER_DBUS_GATE_ENABLE ? dbus_online : (uint8_t)1)
                          && (user_gimbal.yaw_auto >= 0.5f)
                          && sw1_friction_on) ? 1 : 0;
 
