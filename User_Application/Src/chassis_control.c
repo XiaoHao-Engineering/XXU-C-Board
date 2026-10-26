@@ -249,9 +249,9 @@ static void Chassis_Apply_Plot_Mode(void) {
                         &user_vision.target_pitch_acc,    /* ch6 视觉 pitch 角加速度  弧度/秒² */
                         &user_gimbal.yaw_fb_rad,           /* ch7 yaw 控制反馈（位置环实际用的世界角）弧度 */
     &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
-    &user_attitude.qe_roll,    /* ch9 发给视觉的 pitch(=qe_roll, 度) */
+    &user_gimbal.tx_qw,    /* ch9  发给视觉的四元数 w */
     &user_bmi088.temperature,  /* ch10 ★IMU 温度(°C)，看恒温后漂移 */
-    &user_gimbal.pitch,              /* ch11 ★pitch 实际值(度) */
+    &user_attitude.qe_roll,          /* ch11 ★发给视觉的 pitch(=qe_roll, 度) */
     &user_gimbal.pitch_target_ext);   /* ch12 ★pitch 目标值(度) */
 }
 
