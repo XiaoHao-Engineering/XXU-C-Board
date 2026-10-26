@@ -468,7 +468,7 @@ static void Gimbal_Update(void* arg) {
        ⚠️ cam_pitch_off(+3) 是在旧语义下标定的，改完必须重标（见报告）。
        ⚠️ pitch_vel 不用改：d(pitch_fb)/dt ≡ d(gimbal->pitch)/dt（常量 9.1403 的导数为 0），
           下面 pitch_speed × 6 那套换算仍然正确。 */
-    const float tx_pitch = gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG;
+    const float tx_pitch = user_attitude.qe_roll;   /* ★ 与参考工程一致：发 IMU 世界俯仰 */
     gimbal->tx_pitch_deg = tx_pitch;   /* ★只读镜像：这就是 TX 真正发出去的 pitch(度) */
 
     /* ★ 回传的工作模式用【使能开关 yaw_auto】而不是 aim_takeover：
@@ -1178,9 +1178,9 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
          出现一次、不影响闭环；软限位/回位/关节零点全部保持原样。
        ⚠️ cam_pitch_off(+3) 是旧 TX 语义（qe_roll）下标定的，本轮改了 TX 的 pitch 语义，
           必须重标：落点偏 M 就把 cam_pitch_off 减 M，直到准心落在装甲板上。 */
-    const float pitch_fb     = gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG;  /* 上电 = 0 */
-    const float pitch_ext_fb = pitch_fb + GIMBAL_VISION_PITCH_SIGN * vision_pitch_deg + gimbal->cam_pitch_off;   /* ★ 视觉 pitch 偏差方向与我们相反，取 -1 */
-    const float pitch_ext    = pitch_ext_fb + GIMBAL_PITCH_BOOT_TARGET_DEG;   /* 回关节角域 */
+    /* ★ 参考工程语义：视觉发【绝对角】= 目标相对水平面的俯仰（目标在下方为正）。
+       我们的关节角零点在水平 9.1403 处，所以：关节角 = 9.1403 - 视觉值。 */
+    const float pitch_ext = GIMBAL_PITCH_BOOT_TARGET_DEG - vision_pitch_deg + gimbal->cam_pitch_off;
 
     /* 闸④ pitch 量程：必须落在【工程已有】的机械软限位内（留一点余量兼容标定误差）
        ★ 偏差语义下这道闸仍然【必须保留且正确】：pitch_ext 依旧是关节角目标，
