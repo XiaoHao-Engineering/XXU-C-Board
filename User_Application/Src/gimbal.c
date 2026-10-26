@@ -1118,6 +1118,23 @@ static void Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal) {
 static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
     const uint32_t now = HAL_GetTick();
 
+    /* ★★ BUG 修复（2026-10-26）：操作手重开自瞄 = 给视觉【一次新的接管机会】。
+       在 yaw_auto 的 0→1 上升沿清掉闸⑥留下的"重新接管许可"锁存 aim_need_ok 和
+       连续无效帧计数。原来的锁只有"再来一帧通过全部闸门的有效视觉数据"才解得掉：
+       视觉一旦连续野值/超时触发过 Gimbal_Aim_Abort()，操作手把 yaw_auto 关掉再打开
+       也清不掉 -> 下面 aim_need_ok==0 的判断永远不成立 -> 云台再也不跟视觉。
+       ★ 位置：放在 yaw_auto<0.5 的早退分支【之前】，更在本函数更新 yaw_auto_pre
+         之前 —— ① 早退分支里也要把 pre 归 0（否则关自瞄期间 pre 一直停在 1，下次
+         0→1 就检测不到）；② pre 一旦先被更新成 1，这个比较就永远为假。
+       ★ 只放一次"许可"，保护语义不变：重开后若视觉仍然持续野值，
+         GIMBAL_AIM_INVALID_LIMIT 帧后 Gimbal_Aim_Abort() 会再次上锁并抢回摇杆。
+       ★ aim_reject_cnt 不清（累计统计，排错用）；aim_ms 也不清（离线超时判据要用，
+         它在本函数下面"刚打开"那个分支里重新打点）。*/
+    if (gimbal->yaw_auto_pre < 0.5f && gimbal->yaw_auto >= 0.5f) {
+        gimbal->aim_need_ok    = 0;
+        gimbal->aim_bad_frames = 0;
+    }
+
     /* 闸②-a 未使能：视觉一概不参与，摇杆/编码器控制保持原样 */
     if (gimbal->yaw_auto < 0.5f) {
         Gimbal_Aim_Release(gimbal);
