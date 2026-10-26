@@ -274,8 +274,12 @@
 /* ★ pitch 挂 CAN2 而不是 CAN1：CAN1 已有 4 轮 + yaw ≈78% 负载，再加会超出 CAN 可靠区间，
    挂 CAN2 后两条总线都留有余量。yaw(id1)/pitch(id4) 都映射 0x1FE，但分属两总线、不会互相干扰。*/
 #define GIMBAL_PITCH_CAN        user_can_2
-/* ★ 视觉 pitch 正方向与云台俯仰正方向【相反】(实测 2026-10-25：目标越近云台越往上抬，应该下压)。
-   视觉给的目标俯仰角先乘 -1 再进控制；若发现接反了改成 +1。 */
+/* ★★ 视觉 pitch 语义（2026-10-26 第三轮，重要）：
+   发给视觉的 pitch 字段已改为 pitch_fb = gimbal->pitch − 9.1403（上电=0 的关节角，
+   单位 rad），和 yaw 发 yaw_fb 完全对称；接收侧的偏差也叠加在同一个 pitch_fb 上。
+   因此 user_vision.h 的 VISION_PITCH_USE_IMU_ONLY 在本字段上已作废（gimbal.c 不再按它分支）。
+   下面这个 GIMBAL_VISION_PITCH_SIGN 是旧语义（视觉发世界俯仰角）留下的死宏，全工程
+   0 引用，保留只为不破坏历史注释；不要再靠它判断方向。 */
 #define GIMBAL_VISION_PITCH_SIGN   (-1.0f)
 
 #define GIMBAL_PITCH_DIR        (1.0f)       /* 角度增大方向：+1 或 -1，现场核对 */
@@ -440,8 +444,12 @@ typedef struct {
     uint32_t aim_ms;          /* 最近一次【有效帧】的时刻（离线超时判定用）*/
 
     /* ---- 自瞄（视觉）接管：pitch（与 yaw 完全对称，见 gimbal.c 的 Gimbal_Aim_Update）---- */
-    float    pitch_target_ext;  /* 视觉偏差解算出的 pitch 关节角目标 deg（= pitch + 偏差 + cam_pitch_off，覆盖式）*/
-    float    cam_pitch_off;     /* 相机光轴 <-> 枪管俯仰零位偏置 deg */
+    float    pitch_target_ext;  /* 视觉偏差解算出的 pitch 关节角目标 deg
+                                   = (gimbal->pitch − 9.1403) + 偏差 + cam_pitch_off + 9.1403，覆盖式。
+                                   ★ 括号里那一项（pitch−9.1403）就是发给视觉的 pitch 字段（pitch_fb），
+                                     所以视觉偏差叠加的基准和我们控制的基准是同一个量。 */
+    float    cam_pitch_off;     /* 相机光轴 <-> 枪管俯仰零位偏置 deg。
+                                   ⚠️ 2026-10-26 起 TX pitch 语义改为"上电=0 的关节角"，本值需重标 */
     float    aim_ff_gain_pitch; /* pitch 视觉角速度前馈增益（参考 0.6）*/
     float    pitch_aim_err;     /* 观察用：pitch 视觉目标 - 实际 */
     uint8_t  pitch_aim_valid;   /* 1=pitch 视觉目标可用（与 aim_valid 同源）*/

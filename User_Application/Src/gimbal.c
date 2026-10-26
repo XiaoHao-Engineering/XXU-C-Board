@@ -9,6 +9,12 @@
 
 static GIMBAL_DRIVES* s_gimbal = NULL;
 
+/* ★ pitch 自瞄目标角的一阶平滑状态（与 yaw 的 gimbal->target_yaw_smooth 对称）。
+   gimbal.h 的约束：只允许在 gimbal.c 里改，不为它新增结构体字段，所以放文件静态。
+   只有 aim_takeover 分支使用/推进它，摇杆路径完全不碰（aim 为假时行为一个字不变）。
+   在 Gimbal_Pitch_Init 里清零，在接管瞬间（Gimbal_Aim_Update）对齐到当前角度。 */
+static float s_pitch_cmd_smooth = 0.0f;
+
 static void  Gimbal_Update(void* arg);
 static void  Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal);
 static void  Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal);
@@ -163,6 +169,7 @@ void Gimbal_Pitch_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* pitch_motor) {
 
     gimbal->pitch = 0.0f;
     gimbal->target_pitch = 0.0f;
+    s_pitch_cmd_smooth = 0.0f;   /* pitch 自瞄目标平滑状态（文件静态，只服务 aim 分支）*/
     gimbal->pitch_speed = 0.0f;
     gimbal->pitch_current = 0.0f;
     gimbal->pitch_stick = 0.0f;
@@ -437,17 +444,31 @@ static void Gimbal_Update(void* arg) {
 #if GIMBAL_LOCK_WORLD
     /* 回传给视觉：四元数(EKF) + 当前角度/角速度 + 弹速。
        视觉需要这些才能把"像素偏差"换成"目标角度"，并做完整三维变换 */
-    /* ★ pitch 字段：见 user_vision.h 里 VISION_PITCH_USE_IMU_ONLY 的说明。
-       本车 IMU 在 yaw 框架上 -> 枪口世界仰角 = IMU俯仰 + 编码器俯仰 */
-#if VISION_PITCH_USE_IMU_ONLY
-    /* ★ 与参考工程一致：参考的 Gimbal.IMU_Gimbal.Get_Angle_Pitch() 返回 Data_Euler.pitch,
-       而 dvc_bmi088.cpp:524-527 写明"QEKF_INS.Roll 实际是绕 Y 轴的俯仰角"
-       -> Data_Euler.pitch = QEKF_INS.Roll。所以发给视觉的 pitch 要用 qe_roll 而不是 qe_pitch。
-       实测两个独立样本都验证了这一点：包内 pitch ≈ 四元数解出的 roll。 */
-    const float tx_pitch = user_attitude.qe_roll;
-#else
-    const float tx_pitch = user_attitude.qe_pitch + gimbal->pitch;
-#endif
+    /* ★★★ TX pitch 字段的语义（2026-10-26 第三轮修正：和 yaw 对齐，协议语义有变！）---
+       以前这里发 user_attitude.qe_roll（IMU / yaw 框架的世界俯仰），而【控制用】的是
+       gimbal->pitch（编码器关节角）。两者不是同一个量：
+         · qe_roll 里没有 pitch 电机的关节角（IMU 装在 yaw 框架上，看不到枪管自己的俯仰）；
+         · gimbal->pitch 里有 9.1403° 的装配零点。
+       视觉拿 qe_roll 当"当前枪管姿态"算偏差，我们却把偏差加在关节角上 —— 这条链天生
+       差一个"yaw 框架俯仰 + 9.14 零点"，而且这个差随关节角/姿态变化（不是常数），
+       表现就是 pitch 目标来回游走、不收敛。yaw 没有这个问题：发出去的 yaw
+       = imu_yaw − bias_accum，正是控制用的 yaw_fb，收发同一个量。
+
+       现在 pitch 也发【控制用的那个量】，和 yaw 完全对称：
+           yaw   TX = yaw_fb    = wrap(imu_yaw − bias_accum)   （世界角，上电≈0）
+           pitch TX = pitch_fb  = gimbal->pitch − 9.1403       （关节角，上电=0）
+       ★ 视觉侧会看到什么变化（必须转告视觉组）：
+         · q[4] 不变，仍然只描述【yaw 框架】的姿态（不含 pitch 电机）；
+         · pitch 字段从"IMU 世界俯仰 qe_roll"变成"枪管相对 yaw 框架/上电姿态的俯仰"，
+           零点 = 上电时的枪管姿态（= 水平，关节角 9.1403°）。做三维变换时正确的组合是
+           R_barrel = R_q * R_pitch(pitch)，不能把 pitch 再当世界角用；
+         · 单位仍是 rad（VISION_ANGLE_UNIT_RAD=1）。
+       ★ VISION_PITCH_USE_IMU_ONLY 在本字段上【作废】：宏还留在 user_vision.h 里（本轮
+         不动那个文件），但 gimbal.c 不再按它分支，今后也不要再按它理解这个字段。
+       ⚠️ cam_pitch_off(+3) 是在旧语义下标定的，改完必须重标（见报告）。
+       ⚠️ pitch_vel 不用改：d(pitch_fb)/dt ≡ d(gimbal->pitch)/dt（常量 9.1403 的导数为 0），
+          下面 pitch_speed × 6 那套换算仍然正确。 */
+    const float tx_pitch = gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG;
 
     /* ★ 回传的工作模式用【使能开关 yaw_auto】而不是 aim_takeover：
        这是和视觉的握手 —— 只有先告诉视觉"AUTOAIM"，它才会开始发 mode=1/2 的控制包；
@@ -479,8 +500,8 @@ static void Gimbal_Update(void* arg) {
                            /* ★ 按包内单位换算（VISION_ANGLE_UNIT_RAD=1 时 -> 弧度/弧度每秒，与参考工程一致）*/
                            Gimbal_Wrap180(gimbal->imu_yaw - gimbal->bias_accum) * VISION_DEG2PKG,
                            (user_attitude.yaw_rate - gimbal->yaw_bias) * VISION_DEG2PKG,   /* ★ 扣零偏，和 yaw 字段同基准 */
-                           tx_pitch * VISION_DEG2PKG,
-                           gimbal->pitch_speed * 6.0f * VISION_DEG2PKG);
+                           tx_pitch * VISION_DEG2PKG,   /* = pitch_fb（上电=0 的关节角，rad）*/
+                           gimbal->pitch_speed * 6.0f * VISION_DEG2PKG);  /* = d(pitch_fb)/dt，与关节角速度相同 */
     /* ★ 弹速：按参考工程的算法用【摩擦轮转速】换算（rad/s × 系数），
        不再用 ballistics.v0 那个占位值（它恒为 5.0，会让视觉算错弹道）。
        bullet_count 仍为 0：真实弹量要接裁判系统，本车没接。 */
@@ -920,24 +941,60 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
        所以即使以后有人把积分行挪进 aim 分支，命中的也是 0。*/
     const float pitch_stick_cmd = (gimbal->aim_takeover > 0.5f) ? 0.0f : stick;
 
-    /* ★★★ 视觉自瞄接管 pitch（覆盖式，与 yaw 完全对称）----------------------------
+    /* ★★★ 视觉自瞄接管 pitch（覆盖式，与 yaw 同结构）--------------------------------
        参考工程 ita_robot.cpp:721-733：使能 && 在线 && mode!=0 时
          "视觉下，覆盖设置云台的目标角度"：目标角 = 当前姿态 + 视觉偏差（不是叠加到摇杆积分上），
          速度前馈   = 系数(0.6) × 视觉目标角速度 -> 叠加到【速度环】的目标上。
-       ★ 与 yaw 的差别：pitch 这里【没有】"摇杆积分被覆盖"的问题，因为目标本身就是给角度，
-         所以直接覆盖 target_pitch 即可；数据有效性/野值拦截已经在 Gimbal_Aim_Update 里做完。
+       ★ 与 yaw 同结构：覆盖式写目标角 / 同一套 2ms 目标平滑 / 无效帧冻结目标。
+       ★ 与 yaw 唯一刻意不同的地方：pitch【不做】"测量转速 × aim_delay" 的转速外推 ——
+         这是稳定性硬约束，不是省事，推导见本分支末尾的长注释。
        ★ 优先级：自瞄接管 > 弹道解算(pitch_auto) > 摇杆。参考工程也是视觉覆盖在最后。
        ★ 开火链路先不做：接法见参考 ita_robot.cpp:424-434（在线 && mode==CONTROL_AND_FIRE
          且左键按下 -> 请求开火），本工程还没有确认扳机/使能通道，不要自己发明通道号。 */
     if (gimbal->aim_takeover > 0.5f) {
-        /* 关节角目标 + 延迟外推：视觉看到的是【过去】，用云台自身角速度外推到"现在"
-           （pitch_speed 是电机转速 RPM，×6 = deg/s；1 RPM = 6 deg/s）
-           ★ 目标角 100% 来自 [pitch_target_ext + 视觉外推]，不叠加摇杆
-             （摇杆量已在上面的 pitch_stick_cmd 里按 aim_takeover 显式清零）*/
-        gimbal->target_pitch = gimbal->pitch_target_ext
-                             + gimbal->pitch_speed * 6.0f
-                               * (gimbal->aim_delay_ms * 0.001f);
-        gimbal->pitch_aim_err = gimbal->pitch_target_ext - gimbal->pitch;
+        /* ★ 目标角 100% 来自视觉解算值 pitch_target_ext，不叠加摇杆（摇杆量已在上面的
+           pitch_stick_cmd 里按 aim_takeover 显式清零）。
+           ★ 这里【不再】做 "pitch_target_ext + pitch_speed*6*aim_delay" 的转速外推，
+             原因见本分支末尾的长注释（kp·τ > 1，会把位置环翻成正反馈）。 */
+        if (gimbal->pitch_aim_valid != 0) {
+            /* ★★ 只有本帧视觉数据有效才刷新目标；被闸门拒绝时保持上一拍 target_pitch。
+               原来这里没有判断，会拿上一帧的旧目标继续按转速外推。 */
+            const float pitch_cmd = gimbal->pitch_target_ext;
+
+            /* ★★ 目标角一阶平滑（和 yaw 的 target_yaw_smooth 同一套、同一个 τ 字段）：
+               τ = GIMBAL_TGT_SMOOTH_AIM_MS(2ms)，α = dt/(τ+dt)，dt = 1ms。
+               pitch 原来完全没有平滑，视觉 100Hz 的目标阶跃直接进串级外环。 */
+            const float smooth_ms = gimbal->tgt_smooth_aim_ms;
+            if (smooth_ms > 0.0f) {
+                const float alpha_s = GIMBAL_DT_S / (smooth_ms * 0.001f + GIMBAL_DT_S);
+                s_pitch_cmd_smooth += alpha_s * (pitch_cmd - s_pitch_cmd_smooth);
+            } else {
+                s_pitch_cmd_smooth = pitch_cmd;
+            }
+            gimbal->target_pitch = s_pitch_cmd_smooth;
+
+            gimbal->pitch_aim_err = pitch_cmd - gimbal->pitch;
+        }
+
+        /* ★★★ 为什么删掉原来的 "pitch_target_ext + pitch_speed*6*aim_delay" 外推 -----
+           它把【实测关节转速】直接加进位置目标：target = ext + τ·v（τ = aim_delay = 30ms）。
+           串级外环是 "角度误差(deg) -> 转速目标(RPM)"，kp = GIMBAL_PITCH_ANGLE_KP = 12 RPM/deg
+           = 72 (deg/s)/deg，于是闭环满足
+                v = kp·(ext − θ + τ·v)   =>   v·(1 − kp·τ) = kp·(ext − θ)
+           本工程 kp·τ = 72 × 0.030 = 2.16 > 1 -> (1 − kp·τ) < 0：
+           速度项压过位置项、整个位置环符号翻转 = 正反馈。数值仿真（同样的
+           kp/ki/kd + 一阶速度环）里，只要带这个 30ms 外推，pitch 就发散/极限环；
+           去掉它以后各种速度环滞后下都收敛。
+           yaw 为什么没事：yaw 外环 kp = GIMBAL_WORLD_KP = 3.2 RPM/deg = 19.2 (deg/s)/deg，
+           kp·τ = 0.576 < 1，同一个公式在 yaw 上是稳定的小超前。**同一条外推公式在
+           pitch 上不等价**：pitch 外环比 yaw 快 3.75 倍，30ms 的提前量对它是过补偿
+           （稳定边界只有 1/(6·kp) = 14ms）。
+           另外，偏差语义下 pitch_ext 已经含【当前关节角】，链路延迟里云台自身的运动
+           已经由那一项补偿过，再加 τ·v 是重复补偿。
+           视觉【目标自身】的运动仍然有前馈：pitch_aim_rate（视觉角速度 × aim_ff_pitch）
+           在下面被送进速度环，那是不在位置回路里的前馈，不影响稳定性。
+           ⚠️ GIMBAL_AIM_DELAY_MS(30) 本身没动，yaw 继续用它；只是 pitch 不再用
+              "测量转速 × 30ms" 这种会自激的形式。 */
     } else if (gimbal->pitch_auto < 0.5f) {
         /* pitch_auto != 0 时目标角由上层（弹道解算）给，摇杆不参与，避免互相打架 */
         gimbal->target_pitch += pitch_stick_cmd * gimbal->pitch_max_w * GIMBAL_PITCH_RC_DIR * GIMBAL_DT_S;
@@ -998,8 +1055,10 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
        摇杆给的目标角是【连续斜坡】（每 1ms += rate*dt），KF 把目标角速度前馈进外环，
        消掉"先攒误差才有转速"的滞后 -> 推杆跟手；
        视觉接管时目标角是【每帧阶跃刷新】的（~100Hz），KF 对"目标角差分"会每帧打一个
-       尖峰（fout = kf × Δtarget / 1ms），表现就是 pitch 跟着每一帧抖一下 —— 所以接管时置 0，
-       真正需要的目标角速度由视觉通过 ff_ext 单独给（aim_ff_pitch，默认也是 0）。
+       尖峰（fout = kf × Δtarget / 1ms），表现就是 pitch 跟着每一帧抖一下 —— 所以接管时置 0。
+       （本轮给 aim 目标补了 2ms 一阶平滑，阶跃尖峰已经被压低；但 KF 仍然置 0：
+         位置回路里再叠一个"目标微分"只会把视觉噪声放大成转速指令。）
+       真正需要的目标角速度由视觉通过 ff_ext 单独给（aim_ff_pitch）。
        ⚠️ PID_Adv_Set_K_F 的实现就是 pid->kf = kf; （user_pid_adv.c:235），纯字段写、
           无副作用、无额外开销，放在 1kHz 周期里每拍写一次没问题。
        ⚠️ 唯一副作用：在线命令 pitch_ang_kf 改的值会在下一拍被这里覆盖，等于失效；
@@ -1101,7 +1160,26 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
          直到落点居中。 */
     const float yaw_ext   = Gimbal_Wrap180(gimbal->yaw_fb + vision_yaw_deg
                                           + gimbal->cam_yaw_off);
-    const float pitch_ext = gimbal->pitch + vision_pitch_deg + gimbal->cam_pitch_off;
+    /* ★★★ pitch 侧和 yaw 完全对称：偏差叠加在【发给视觉的那个姿态量】上 ---------
+       yaw：TX 发 yaw_fb = wrap(imu_yaw − bias_accum)（世界角，上电≈0），
+            它同时也是 yaw 位置环的反馈；RX 就直接 target = yaw_fb + 偏差 + cam_yaw_off。
+       pitch：TX 发 pitch_fb = gimbal->pitch − 9.1403（关节角，上电=0，见 Gimbal_Update
+              里 tx_pitch 那一段）；RX 同样 target_fb = pitch_fb + 偏差 + cam_pitch_off。
+       下发前再把 9.1403 加回去，因为软限位 / 回位 / PID / Set_Motor_State 全在
+       【关节角】域（−10.8 ~ +28.6，上电回位 9.1403，一个都不改）。
+       ★ 为什么这样就收敛（这是本轮真正的根因修复）：视觉算偏差时用的"当前姿态"和
+         我们叠加偏差用的"当前姿态"现在是同一个量 pitch_fb —— 云台一动，我们 100Hz
+         把新的 pitch_fb 发给视觉，视觉下一帧的偏差就跟着减小，形成真正的负反馈闭环。
+         改之前 TX 发的是 qe_roll（不含 pitch 关节角，云台怎么动它都不变），
+         视觉的偏差不会随关节角减小，target = 当前 + 偏差 就退化成"每帧 +偏差"的积分，
+         目标只能来回游走/一路顶到限位。
+       ★ 9.1403 在这里只是"把上电=0 的姿态量变回编码器关节角"的坐标变换，
+         出现一次、不影响闭环；软限位/回位/关节零点全部保持原样。
+       ⚠️ cam_pitch_off(+3) 是旧 TX 语义（qe_roll）下标定的，本轮改了 TX 的 pitch 语义，
+          必须重标：落点偏 M 就把 cam_pitch_off 减 M，直到准心落在装甲板上。 */
+    const float pitch_fb     = gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG;  /* 上电 = 0 */
+    const float pitch_ext_fb = pitch_fb + vision_pitch_deg + gimbal->cam_pitch_off;
+    const float pitch_ext    = pitch_ext_fb + GIMBAL_PITCH_BOOT_TARGET_DEG;   /* 回关节角域 */
 
     /* 闸④ pitch 量程：必须落在【工程已有】的机械软限位内（留一点余量兼容标定误差）
        ★ 偏差语义下这道闸仍然【必须保留且正确】：pitch_ext 依旧是关节角目标，
@@ -1215,6 +1293,9 @@ static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
     if (gimbal->aim_takeover < 0.5f) {
         gimbal->yaw_target_ext = gimbal->imu_yaw;
         gimbal->pitch_target_ext = gimbal->pitch;
+        /* ★ pitch 目标平滑状态也对齐到当前角度：否则接管第一拍会从上一轮的旧平滑值
+           慢慢爬过来（和 target_pitch 的初始化同一个理由）。 */
+        s_pitch_cmd_smooth = gimbal->pitch;
         gimbal->aim_bad_frames = 0;
         gimbal->aim_rate = 0.0f;
         gimbal->pitch_aim_rate = 0.0f;
