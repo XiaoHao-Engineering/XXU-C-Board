@@ -536,6 +536,7 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
        ⚠️ yaw_auto 会被数据闸门自动清零（连续 5 帧视觉数据无效 -> 退出接管回摇杆），
           看到它自己掉成 0 就说明视觉那一侧在给野值/丢目标，先查视觉，不要硬开。
        ⚠️ 开火链路【没有接】：接法见参考 ita_robot.cpp:424-434，本工程还没确认扳机通道。 */
+    {"pitch_sem",   &user_gimbal.pitch_sem,          0.0f,    3.0f, NULL},
     {"yaw_auto",      &user_gimbal.yaw_auto,          0.0f,    1.0f, NULL},
     {"aim_ff_gain",   &user_gimbal.aim_ff_gain,      -1.0f,    1.0f, NULL},
     {"aim_ff_pitch",  &user_gimbal.aim_ff_gain_pitch,-1.0f,    1.0f, NULL},

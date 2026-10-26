@@ -86,6 +86,7 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
 
     /* 自瞄 pitch 侧（与 yaw 对称）+ 数据闸门的计数器 */
     gimbal->pitch_target_ext = 0.0f;
+    gimbal->pitch_sem = 0.0f;   /* 默认 0 = 绝对角 9.14-v */
     gimbal->cam_pitch_off = GIMBAL_CAM_PITCH_OFF;
     gimbal->aim_ff_gain_pitch = GIMBAL_AIM_FF_GAIN_PITCH;
     gimbal->pitch_aim_err = 0.0f;
@@ -1037,7 +1038,22 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
 
     /* 单位换算：包内是【弧度】（与参考工程一致，见 user_vision.h），工程内部是【度】 */
     const float yaw_ext = Gimbal_Wrap180(raw_yaw * VISION_PKG2DEG + gimbal->cam_yaw_off);
-    const float pitch_ext = raw_pitch * VISION_PKG2DEG + gimbal->cam_pitch_off;
+    /* ★ 视觉 pitch 语义可选（在线调参 pitch_sem，用于现场确定视觉到底发的是什么）：
+       0 = 绝对角, 相对水平, 目标在下方为正  -> 关节角 = 9.1403 - v
+       1 = 绝对角, 相对水平, 目标在下方为负  -> 关节角 = 9.1403 + v
+       2 = 偏差量, 与我们同向               -> 关节角 = 当前 + v
+       3 = 偏差量, 与我们反向               -> 关节角 = 当前 - v
+   确定哪一档能收敛后，把宏里那个档固定下来即可。 */
+    const float pitch_v = raw_pitch * VISION_PKG2DEG;
+    float pitch_ext;
+    switch ((int)gimbal->pitch_sem) {
+        case 1:  pitch_ext = GIMBAL_PITCH_BOOT_TARGET_DEG + pitch_v; break;
+        case 2:  pitch_ext = gimbal->pitch + pitch_v;                break;
+        case 3:  pitch_ext = gimbal->pitch - pitch_v;                break;
+        case 0:
+        default: pitch_ext = GIMBAL_PITCH_BOOT_TARGET_DEG - pitch_v; break;
+    }
+    pitch_ext += gimbal->cam_pitch_off;
     /* TODO(需实测标定): 视觉给的 pitch 与工程内部的 pitch（上电标定后的【关节角】）之间
        是否存在随姿态变化的差？参考工程是直接把 Get_Target_Pitch() 当关节角目标用
        （ita_robot.cpp:725），本工程照做；若实测发现"底盘俯仰变化后 pitch 目标整体偏了"，

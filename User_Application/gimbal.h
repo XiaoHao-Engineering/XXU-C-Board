@@ -437,6 +437,7 @@ typedef struct {
     uint32_t aim_ms;          /* 最近一次【有效帧】的时刻（离线超时判定用）*/
 
     /* ---- 自瞄（视觉）接管：pitch（与 yaw 完全对称，见 gimbal.c 的 Gimbal_Aim_Update）---- */
+    float pitch_sem;      /* ★视觉 pitch 语义选择(在线调参)：0=9.14-v 1=9.14+v 2=当前+v 3=当前-v */
     float    pitch_target_ext;  /* 视觉给的 pitch 目标角 deg（绝对角，覆盖式）*/
     float    cam_pitch_off;     /* 相机光轴 <-> 枪管俯仰零位偏置 deg */
     float    aim_ff_gain_pitch; /* pitch 视觉角速度前馈增益（参考 0.6）*/
