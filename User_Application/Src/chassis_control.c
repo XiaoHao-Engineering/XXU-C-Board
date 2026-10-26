@@ -247,10 +247,10 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
 static void Chassis_Apply_Plot_Mode(void) {
     Serialplot_Set_Data(&user_serialplot, 12,
                         &user_vision.target_yaw,                /* ch1 视觉 yaw 角度        弧度     */
-                        &user_vision.target_yaw_vel,        /* ch2 视觉 yaw 角速度      弧度/秒  */
+    &user_shooter.friction_target,   /* ch2 ★摩擦轮目标转速(应=6400) */
                         &user_gimbal.aim_takeover,          /* ch3 ★自瞄是否接管 0/1（替代原视觉 yaw 角加速度）*/
                         &user_vision.target_pitch,            /* ch4 视觉 pitch 角度      弧度     */
-                        &user_vision.target_pitch_vel,    /* ch5 视觉 pitch 角速度    弧度/秒  */
+    &user_shooter.online_mask,       /* ch5 ★射击电调在线掩码(应=7) */
                         &user_gimbal.aim_need_ok_f,         /* ch6 ★重接管锁存 0/1（替代原视觉 pitch 角加速度）*/
                         &user_gimbal.yaw_fb_rad,           /* ch7 yaw 控制反馈（位置环实际用的世界角）弧度 */
     &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
