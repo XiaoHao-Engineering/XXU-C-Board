@@ -81,6 +81,8 @@ def main():
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--head", choices=["both", "aa", "41"], default="both")
     ap.add_argument("--raw", action="store_true", help="额外打印整帧 hex")
+    ap.add_argument("--raw-only", action="store_true",
+                    help="只打印 43 字节原始数据（hex），不打印解析表格")
     args = ap.parse_args()
 
     try:
@@ -101,11 +103,12 @@ def main():
     if args.head in ("both", "41"):
         heads.append(HEAD_41)
 
-    print(f"监听 {args.port} @ {args.baud}  帧头={args.head}  帧长={FRAME_LEN}")
-    print("-" * 118)
-    print(f"{'时刻':<13}{'mode':>4} {'yaw°':>9} {'yawVel':>9} {'pitch°':>9} "
-          f"{'pitVel':>9} {'弹速':>7} {'弹量':>5}  {'|q|':>6}  CRC")
-    print("-" * 118)
+    if not args.raw_only:
+        print(f"监听 {args.port} @ {args.baud}  帧头={args.head}  帧长={FRAME_LEN}")
+        print("-" * 118)
+        print(f"{'时刻':<13}{'mode':>4} {'yaw°':>9} {'yawVel':>9} {'pitch°':>9} "
+              f"{'pitVel':>9} {'弹速':>7} {'弹量':>5}  {'|q|':>6}  CRC")
+        print("-" * 118)
 
     buf = bytearray()
     n_ok = n_bad = 0
@@ -129,6 +132,11 @@ def main():
                     break
                 frame = bytes(buf[pos:pos + FRAME_LEN])
                 del buf[:pos + FRAME_LEN]
+
+                if args.raw_only:
+                    print(frame.hex(" ").upper())
+                    n_ok += 1
+                    continue
 
                 crc_calc = crc16_modbus(frame[:41])
                 d = parse_frame(frame)
