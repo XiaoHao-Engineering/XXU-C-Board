@@ -336,7 +336,7 @@ static void Shooter_Update(void* arg) {
     /* ★★ 失联时【不解析】遥控字段（一律按 0）：
        否则 sw1/sw2/roll 会一直保持最后一帧的值，sw1 停在"上"就会让摩擦轮一直转。
        0 档对 sw1/sw2 都是"非上档"，对 roll 是"中位" -> 后面所有判定自然全部走失能分支。 */
-    const uint8_t sw2 = dbus_online ? user_dbus.sw2 : (uint8_t)0;
+    const uint8_t sw2 = dbus_online ? user_dbus.sw1 : (uint8_t)0;   /* ★ user_dbus.sw1 实际是【右杆】(DBUS 解码位段交叉) */
     const float wheel = dbus_online ? (float)user_dbus.roll : 0.0f;
 
     /* ★★ 总闸（三道，缺一不可）：
@@ -347,7 +347,7 @@ static void Shooter_Update(void* arg) {
        任一不满足 -> 摩擦轮 + 拨弹盘全部失能，不管 sw2 在哪。
        ⚠️ yaw_auto=0 时 sw1 归底盘做模式选择（上=跟随），此时这道闸必然关死，
           所以"跟随模式"和"摩擦轮"共用 sw1 的上档，但永不同时生效。 */
-    const uint8_t sw1 = dbus_online ? user_dbus.sw1 : (uint8_t)0;
+    const uint8_t sw1 = dbus_online ? user_dbus.sw2 : (uint8_t)0;   /* ★ user_dbus.sw2 实际是【左杆】S1 */
 #if SHOOTER_SW1_GATE_ENABLE
     const uint8_t sw1_friction_on = (sw1 == SHOOTER_SW1_FRICTION_ON) ? 1 : 0;
 #else

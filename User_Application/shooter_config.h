@@ -110,7 +110,13 @@
        ② sw1 == 上（本宏）
      任一不满足 -> 摩擦轮 + 拨弹盘全部失能。 */
 #define SHOOTER_SW1_FRICTION_ON     (1)      /* sw1 上档 = 摩擦轮开（DBUS 上=1 / 下=2 / 中=3）*/
-#define SHOOTER_SW1_GATE_ENABLE     (0)      /* 1=启用 sw1 这道闸；0=退回旧行为（只看 yaw_auto，排错用）*/
+#define SHOOTER_SW1_GATE_ENABLE     (1)      /* 1=启用 sw1 这道闸（用户定案：S1 拨上才允许摩擦轮）；
+                                                0=退回旧行为（只看 yaw_auto，仅排错用）。
+                                                ★ 待实车核对：user_dji_bus.c 里 user_dbus.sw1 取的是
+                                                  dbus_buf[5] 的 bit7:6（标准 DBUS 的 s2=右杆），
+                                                  user_dbus.sw2 才是 bit5:4（标准 s1=左杆）。
+                                                  若串口 ch2（=user_dbus.sw1）随【右杆】变化，说明左右反了，
+                                                  下一轮改 user_dji_bus.c 的位段或在这里换用另一个字段。 */
 
 /* ---- ★★ 遥控(DBUS)掉线保护：失联 -> 强制失能（安全关键，第三道总闸）---------------
    判据【复用工程已有机制，不新造一套】：

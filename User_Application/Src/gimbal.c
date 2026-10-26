@@ -113,6 +113,8 @@ void Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor) {
     gimbal->yaw_fb   = 0.0f;      /* 位置环实际反馈镜像（串口绘图 ch7）*/
     gimbal->yaw_fb_rad = 0.0f;    /* ch7 弧度镜像（只读观测，见 gimbal.h）*/
     gimbal->yaw_rad    = 0.0f;    /* ch8 弧度镜像（只读观测，见 gimbal.h）*/
+    gimbal->sw1_f      = 0.0f;    /* ch2 拨杆档位镜像（只读观测，见 gimbal.h）*/
+    gimbal->sw2_f      = 0.0f;    /* ch5 拨杆档位镜像（只读观测，见 gimbal.h）*/
     gimbal->target_speed = 0.0f;
 
     PID_Init(&gimbal->yaw_pid, GIMBAL_YAW_KP, GIMBAL_YAW_KI, GIMBAL_YAW_KD,
@@ -313,6 +315,15 @@ static void Gimbal_Update(void* arg) {
     /* 观察用镜像 + 遥控目标：故意放在对齐判断【之前】，云台没接通也能从串口看 graw/gspd/gtgt */
     gimbal->angle_raw = DJI_Motor_Get_Angle(gimbal->yaw_motor);
     gimbal->speed = DJI_Motor_Get_Speed(gimbal->yaw_motor);
+
+    /* ★★ 拨杆原始档位只读镜像（1kHz，给串口绘图 ch2/ch5）：
+       ① user_dbus.sw1 / sw2 是 uint8_t，而 Serialplot_Set_Data() 按 sizeof(float)
+          逐 4 字节 memcpy，直接把它们的地址传进去会读到相邻字段 -> 图上 NaN/1e38，
+          所以这里每拍同步成 float；
+       ② 只读观测：不解析、不判断、不参与任何控制，档位语义的唯一使用者仍是 shooter.c；
+       ③ 放在所有 early-return 之前，云台掉线/未对齐时也照常刷新。 */
+    gimbal->sw1_f = (float)user_dbus.sw1;
+    gimbal->sw2_f = (float)user_dbus.sw2;
 
 #if GIMBAL_LOCK_WORLD
     /* A 板在云台 yaw 上，所以 IMU 的 yaw 就是【云台的世界朝向】。

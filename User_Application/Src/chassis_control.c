@@ -46,10 +46,12 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
  *
  * 通道顺序（从上到下，不能改；SerialPlot 里的通道号就是它）：
  *   ch1  target_yaw           视觉目标 YAW 角度        弧度      user_vision.target_yaw
- *   ch2  target_yaw_vel       视觉目标 YAW 角速度      弧度/秒   user_vision.target_yaw_vel
+ *   ch2  sw1_f                ★左拨杆 S1 原始档位 1/2/3      user_gimbal.sw1_f
+ *                             （1=上 2=下 3=中；0=遥控失联时按 0 处理）
  *   ch3  aim_takeover         ★自瞄本拍是否接管 0/1  无量纲    user_gimbal.aim_takeover
  *   ch4  target_pitch         视觉目标 PITCH 角度      弧度      user_vision.target_pitch
- *   ch5  target_pitch_vel     视觉目标 PITCH 角速度    弧度/秒   user_vision.target_pitch_vel
+ *   ch5  sw2_f                ★右拨杆 S2 原始档位 1/2/3      user_gimbal.sw2_f
+ *                             （1=上 2=下 3=中；0=遥控失联时按 0 处理）
  *   ch6  aim_need_ok_f        ★重接管锁存 0/1（1=被野值中止过，等合格帧才重接管）
  *                                                               user_gimbal.aim_need_ok_f
  *   ch7  yaw_fb_rad           位置环实际用的 yaw 反馈  弧度      user_gimbal.yaw_fb_rad
@@ -61,9 +63,12 @@ static Chassis_SourceValid   s_source_valid = ChassisControl_SourceAlwaysValid;
  *   ch11 tx_qy                发给视觉的四元数 y      无量纲    user_gimbal.tx_qy
  *   ch12 tx_qz                发给视觉的四元数 z      无量纲    user_gimbal.tx_qz
  *
- * ★ ch1/ch2/ch4/ch5 就是视觉通过 USART1 发过来的 4 个角度量（yaw 角、yaw 角速度、
- *   pitch 角、pitch 角速度）；这里传的是 user_vision 里【包内原始单位】的镜像
- *   （弧度 / 弧度每秒）；需要度制时用对应的 _deg 字段（收帧时已 ×VISION_PKG2DEG）。
+ * ★ ch1/ch4 就是视觉通过 USART1 发过来的 yaw/pitch 角度量；这里传的是 user_vision
+ *   里【包内原始单位】的镜像（弧度）；需要度制时用对应的 _deg 字段（收帧时已 ×VISION_PKG2DEG）。
+ * ★ ch2 / ch5 = 左右拨杆的【原始档位】诊断量（2026-10-26）：直接读 user_dbus.sw1 / sw2
+ *   的 0/1/2/3，用来确认"拨到上/中/下各等于几"以及"哪个字段对应哪根杆"。
+ *   gimbal.c 每拍把它们同步成 float（uint8_t 不能直接绑到绘图通道，见下面第 92 行的说明）。
+ *   原来 ch2/ch5 是摩擦轮实际转速/目标，需要时把这两行换回去即可（其余通道不动）。
  * ★ ch3 / ch6 改为【云台自瞄状态】诊断量（2026-10-26）：ch3 = aim_takeover（本拍是否
  *   真的接管），ch6 = aim_need_ok（是否被"连续野值"锁住、等待合格帧）。原来这两路是
  *   视觉的 yaw/pitch 角加速度，工程里没有任何地方使用；换成状态量后，操作手在图上
@@ -241,16 +246,17 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
      逐 4 字节 memcpy，传非 float 的地址会读到相邻字段的字节 -> NaN / 1e38。
    ★ 通道数必须与实参个数一致（12）；上位机固定 Frame Start=AB / #Channels=12 /
      Frame Size=48（线上 1 + 12×4 + 1 = 50 字节）。
-   ★ ch1/ch2/ch4/ch5 = 视觉发的 4 个角度量；ch3 = aim_takeover、ch6 = aim_need_ok_f
-     （自瞄诊断，见文件顶部说明）；ch7 = yaw 控制反馈，ch8 = YAW 编码器关节角，
+   ★ ch1/ch4 = 视觉发的 yaw/pitch 角度量；ch2/ch5 = 左/右拨杆原始档位（1/2/3=上/下/中）；
+     ch3 = aim_takeover、ch6 = aim_need_ok_f（自瞄诊断，见文件顶部说明）；
+     ch7 = yaw 控制反馈，ch8 = YAW 编码器关节角，
      ch9~ch12 = 发给视觉的四元数 w/x/y/z（gimbal.c 里每拍更新，见 tx_qw 那一段）。*/
 static void Chassis_Apply_Plot_Mode(void) {
     Serialplot_Set_Data(&user_serialplot, 12,
                         &user_vision.target_yaw,                /* ch1 视觉 yaw 角度        弧度     */
-    &user_shooter.friction_rpm,      /* ch2 ★摩擦轮实际转速(应爬到6400，若一直0=电机/电调/相线) */
+                        &user_gimbal.sw1_f,                     /* ch2 ★左拨杆 S1 原始档位（1/2/3=上/下/中，0=失联）*/
                         &user_gimbal.aim_takeover,          /* ch3 ★自瞄是否接管 0/1（替代原视觉 yaw 角加速度）*/
                         &user_vision.target_pitch,            /* ch4 视觉 pitch 角度      弧度     */
-    &user_shooter.friction_target,   /* ch5 ★摩擦轮目标(应=6400，arm=0 时是0) */
+                        &user_gimbal.sw2_f,                     /* ch5 ★右拨杆 S2 原始档位（1/2/3=上/下/中，0=失联）*/
                         &user_gimbal.aim_need_ok_f,         /* ch6 ★重接管锁存 0/1（替代原视觉 pitch 角加速度）*/
                         &user_gimbal.yaw_fb_rad,           /* ch7 yaw 控制反馈（位置环实际用的世界角）弧度 */
     &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */

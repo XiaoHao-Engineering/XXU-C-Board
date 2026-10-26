@@ -549,6 +549,15 @@ typedef struct {
     float    calib_sum2;       /* Σ gyro_z² (deg/s)² */
     float    calib_min;        /* 窗口内最小 gyro_z deg/s */
     float    calib_max;        /* 窗口内最大 gyro_z deg/s */
+
+    /* ---- ★★ 拨杆原始档位镜像（只读观测，串口绘图 ch2/ch5 用）-------------------
+       user_dbus.sw1 / sw2 是 uint8_t，而 Serialplot_Set_Data() 按 sizeof(float)
+       逐 4 字节 memcpy，直接把它们的地址传进去会读到相邻字段的字节（图上变成
+       NaN / 1e38），所以每拍在 gimbal.c 的 1kHz 任务里同步成 float。
+       取值 = DBUS 原始档位：1=上 2=下 3=中（0 表示遥控失联时被强制按 0 处理）。
+       ★ 只读：这里只做观测，绝不参与任何控制运算。 */
+    float    sw1_f;            /* = (float)user_dbus.sw1（当前解码位段 dbus_buf[5] bit7:6）*/
+    float    sw2_f;            /* = (float)user_dbus.sw2（当前解码位段 dbus_buf[5] bit5:4）*/
 } GIMBAL_DRIVES;
 
 void  Gimbal_Init(GIMBAL_DRIVES* gimbal, DJI_MOTOR_DRIVES* yaw_motor);
