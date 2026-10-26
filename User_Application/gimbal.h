@@ -457,6 +457,11 @@ typedef struct {
           新的接管机会（实现见 Gimbal_Aim_Update 顶部）—— 否则这把锁一旦置 1，操作手
           怎么重开自瞄都解不开，云台就永远不跟视觉了。 */
     uint8_t  aim_need_ok;
+    /* ★ 串口绘图 ch6 的只读镜像：aim_need_ok 的 float 版本。
+       Serialplot_Set_Data 按 sizeof(float) 逐 4 字节 memcpy，直接把 uint8_t 的地址传进去
+       会读到相邻填充/字段的字节（图上不是 0/1，是极小浮点垃圾），所以每拍在 gimbal.c 里
+       同步一份 float。只读观测，绝不参与控制。 */
+    float    aim_need_ok_f;
     uint32_t last_vision_frame; /* 上一拍见到的视觉有效帧计数（用于"是不是新的一帧"判定）*/
     uint32_t last_dbus_count;      /* 上一周期见到的遥控帧计数 */
     uint16_t dbus_offline_ms;      /* 遥控断线累计 ms */
