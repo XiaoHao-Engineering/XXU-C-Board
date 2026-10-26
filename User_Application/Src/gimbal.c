@@ -1179,7 +1179,7 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
        ⚠️ cam_pitch_off(+3) 是旧 TX 语义（qe_roll）下标定的，本轮改了 TX 的 pitch 语义，
           必须重标：落点偏 M 就把 cam_pitch_off 减 M，直到准心落在装甲板上。 */
     const float pitch_fb     = gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG;  /* 上电 = 0 */
-    const float pitch_ext_fb = pitch_fb + vision_pitch_deg + gimbal->cam_pitch_off;
+    const float pitch_ext_fb = pitch_fb + GIMBAL_VISION_PITCH_SIGN * vision_pitch_deg + gimbal->cam_pitch_off;   /* ★ 视觉 pitch 偏差方向与我们相反，取 -1 */
     const float pitch_ext    = pitch_ext_fb + GIMBAL_PITCH_BOOT_TARGET_DEG;   /* 回关节角域 */
 
     /* 闸④ pitch 量程：必须落在【工程已有】的机械软限位内（留一点余量兼容标定误差）
