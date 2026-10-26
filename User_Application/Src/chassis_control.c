@@ -247,7 +247,7 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
 static void Chassis_Apply_Plot_Mode(void) {
     Serialplot_Set_Data(&user_serialplot, 12,
                         &user_vision.target_yaw,                /* ch1 视觉 yaw 角度        弧度     */
-    &user_gimbal.yaw_auto,           /* ch2 ★yaw_auto(应=1，是总闸之一) */
+    &user_shooter.friction_rpm,      /* ch2 ★摩擦轮实际转速(应爬到6400，若一直0=电机/电调/相线) */
                         &user_gimbal.aim_takeover,          /* ch3 ★自瞄是否接管 0/1（替代原视觉 yaw 角加速度）*/
                         &user_vision.target_pitch,            /* ch4 视觉 pitch 角度      弧度     */
     &user_shooter.friction_target,   /* ch5 ★摩擦轮目标(应=6400，arm=0 时是0) */
