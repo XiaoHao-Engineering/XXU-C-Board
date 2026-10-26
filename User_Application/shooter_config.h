@@ -110,7 +110,7 @@
        ② sw1 == 上（本宏）
      任一不满足 -> 摩擦轮 + 拨弹盘全部失能。 */
 #define SHOOTER_SW1_FRICTION_ON     (1)      /* sw1 上档 = 摩擦轮开（DBUS 上=1 / 下=2 / 中=3）*/
-#define SHOOTER_SW1_GATE_ENABLE     (0)      /* 1=启用 sw1 这道闸；0=退回旧行为（只看 yaw_auto，排错用）*/
+#define SHOOTER_SW1_GATE_ENABLE     (1)      /* 1=启用 sw1 这道闸；0=退回旧行为（只看 yaw_auto，排错用）*/
 
 /* ---- ★★ 遥控(DBUS)掉线保护：失联 -> 强制失能（安全关键，第三道总闸）---------------
    判据【复用工程已有机制，不新造一套】：
