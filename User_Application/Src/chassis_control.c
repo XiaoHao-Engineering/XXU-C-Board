@@ -256,7 +256,7 @@ static void Chassis_Apply_Plot_Mode(void) {
     &user_gimbal.roll_f,             /* ch2 ★左上拨轮原始值(单发:推过100触发) */
                         &user_gimbal.aim_takeover,          /* ch3 ★自瞄是否接管 0/1（替代原视觉 yaw 角加速度）*/
                         &user_vision.target_pitch,            /* ch4 视觉 pitch 角度      弧度     */
-                        &user_gimbal.sw2_f,                     /* ch5 ★右拨杆 S2 原始档位（1/2/3=上/下/中，0=失联）*/
+    &user_gimbal.yaw_auto,           /* ch5 ★yaw_auto 开关(应=1) */
                         &user_gimbal.aim_need_ok_f,         /* ch6 ★重接管锁存 0/1（替代原视觉 pitch 角加速度）*/
                         &user_gimbal.yaw_fb_rad,           /* ch7 yaw 控制反馈（位置环实际用的世界角）弧度 */
     &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
