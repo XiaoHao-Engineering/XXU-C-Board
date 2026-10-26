@@ -458,7 +458,7 @@ static void Gimbal_Update(void* arg) {
         gimbal->tx_qy, gimbal->tx_qz,
                            /* ★ 按包内单位换算（VISION_ANGLE_UNIT_RAD=1 时 -> 弧度/弧度每秒，与参考工程一致）*/
                            Gimbal_Wrap180(gimbal->imu_yaw - gimbal->bias_accum) * VISION_DEG2PKG,
-                           user_attitude.yaw_rate * VISION_DEG2PKG,
+                           (user_attitude.yaw_rate - gimbal->yaw_bias) * VISION_DEG2PKG,   /* ★ 扣零偏，和 yaw 字段同基准 */
                            tx_pitch * VISION_DEG2PKG,
                            gimbal->pitch_speed * 6.0f * VISION_DEG2PKG);
     /* ★ 弹速：按参考工程的算法用【摩擦轮转速】换算（rad/s × 系数），
