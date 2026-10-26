@@ -1116,6 +1116,13 @@ static void Gimbal_Aim_Abort(GIMBAL_DRIVES* gimbal) {
 }
 
 static void Gimbal_Aim_Update(GIMBAL_DRIVES* gimbal) {
+    /* ★ 操作手重开自瞄（yaw_auto 0->1）= 给视觉一次新的接管机会：
+       清掉 Abort 留下的 aim_need_ok 锁和连续无效帧计数。
+       否则一旦触发过 Abort，yaw_auto 关掉再开也解不开，云台永远不接管。 */
+    if (gimbal->yaw_auto_pre < 0.5f && gimbal->yaw_auto >= 0.5f) {
+        gimbal->aim_need_ok    = 0;
+        gimbal->aim_bad_frames = 0;
+    }
     const uint32_t now = HAL_GetTick();
 
     /* 闸②-a 未使能：视觉一概不参与，摇杆/编码器控制保持原样 */
