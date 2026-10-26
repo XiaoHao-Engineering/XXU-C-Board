@@ -322,6 +322,7 @@ static void Gimbal_Update(void* arg) {
           所以这里每拍同步成 float；
        ② 只读观测：不解析、不判断、不参与任何控制，档位语义的唯一使用者仍是 shooter.c；
        ③ 放在所有 early-return 之前，云台掉线/未对齐时也照常刷新。 */
+    gimbal->roll_f = (float)user_dbus.roll;
     gimbal->sw1_f = (float)user_dbus.sw1;
     gimbal->sw2_f = (float)user_dbus.sw2;
 

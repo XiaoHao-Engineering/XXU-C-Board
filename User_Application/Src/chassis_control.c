@@ -253,7 +253,7 @@ static float Chassis_Encoder_SingleTurn_Deg(const DJI_MOTOR_DRIVES* motor) {
 static void Chassis_Apply_Plot_Mode(void) {
     Serialplot_Set_Data(&user_serialplot, 12,
                         &user_vision.target_yaw,                /* ch1 视觉 yaw 角度        弧度     */
-                        &user_gimbal.sw1_f,                     /* ch2 ★左拨杆 S1 原始档位（1/2/3=上/下/中，0=失联）*/
+    &user_gimbal.roll_f,             /* ch2 ★左上拨轮原始值(单发:推过100触发) */
                         &user_gimbal.aim_takeover,          /* ch3 ★自瞄是否接管 0/1（替代原视觉 yaw 角加速度）*/
                         &user_vision.target_pitch,            /* ch4 视觉 pitch 角度      弧度     */
                         &user_gimbal.sw2_f,                     /* ch5 ★右拨杆 S2 原始档位（1/2/3=上/下/中，0=失联）*/

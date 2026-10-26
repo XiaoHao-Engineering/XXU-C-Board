@@ -17,8 +17,8 @@ static void rc_callback_handler(void) {
 
     dbus_drive->roll = (int16_t)(((dbus_buf[16] >> 0 | dbus_buf[17] << 8) & 0x07FF) - 1024);
 
-    dbus_drive->sw1  = (uint8_t)((dbus_buf[5] >> 4) & 0x0003);   /* ★ 左拨杆 S1：bit 5:4（标准 DBUS）*/
-    dbus_drive->sw2  = (uint8_t)((dbus_buf[5] >> 6) & 0x0003);   /* ★ 右拨杆 S2：bit 7:6（标准 DBUS）*/
+    dbus_drive->sw1  = ((dbus_buf[5] >> 4) & 0x000C) >> 2;   /* 实测：bit 7:6 = 左上拨杆 S1 */
+    dbus_drive->sw2  = ((dbus_buf[5] >> 4) & 0x0003) >> 0;   /* 实测：bit 5:4 = 右上拨杆 S2 */
 
     dbus_drive->is_update = 1;
     dbus_drive->rx_count++;       /* 累计帧数：多个模块各自用它判断"有没有新数据" */
