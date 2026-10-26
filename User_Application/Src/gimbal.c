@@ -366,7 +366,7 @@ static void Gimbal_Update(void* arg) {
        积分用的也是限斜率之后的 target_rate，所以目标角不会跳。 */
     if (gimbal->aim_takeover > 0.5f) {
         /* ★★★ 自瞄接管：目标角 100% 来自视觉，摇杆完全不参与。
-           参考 ita_robot.cpp:639-650 —— "视觉下，覆盖设置云台的目标角度"（世界绝对角）。 */
+           参考 ita_robot.cpp:639-650 —— "视觉下，覆盖设置云台的目标角度"（目标角 = 当前姿态 + 视觉偏差，见 Gimbal_Aim_Accept_Frame）。 */
         /* ★ 硬约束（不是"把某个增益设 0"）：本拍先把摇杆角速度前馈显式清零，
            下面只允许由 yaw_target_ext 写 target_yaw；这个分支里不再出现 stick / rate_cmd，
            所以摇杆怎么推都进不了位置环（target_rate 是速度前馈里唯一的摇杆项）。*/
@@ -922,7 +922,7 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
 
     /* ★★★ 视觉自瞄接管 pitch（覆盖式，与 yaw 完全对称）----------------------------
        参考工程 ita_robot.cpp:721-733：使能 && 在线 && mode!=0 时
-         "视觉下，覆盖设置云台的目标角度"：目标角 = 视觉给的世界绝对角（不是叠加到摇杆积分上），
+         "视觉下，覆盖设置云台的目标角度"：目标角 = 当前姿态 + 视觉偏差（不是叠加到摇杆积分上），
          速度前馈   = 系数(0.6) × 视觉目标角速度 -> 叠加到【速度环】的目标上。
        ★ 与 yaw 的差别：pitch 这里【没有】"摇杆积分被覆盖"的问题，因为目标本身就是给角度，
          所以直接覆盖 target_pitch 即可；数据有效性/野值拦截已经在 Gimbal_Aim_Update 里做完。
@@ -930,7 +930,7 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
        ★ 开火链路先不做：接法见参考 ita_robot.cpp:424-434（在线 && mode==CONTROL_AND_FIRE
          且左键按下 -> 请求开火），本工程还没有确认扳机/使能通道，不要自己发明通道号。 */
     if (gimbal->aim_takeover > 0.5f) {
-        /* 世界绝对角 + 延迟外推：视觉看到的是【过去】，用云台自身角速度外推到"现在"
+        /* 关节角目标 + 延迟外推：视觉看到的是【过去】，用云台自身角速度外推到"现在"
            （pitch_speed 是电机转速 RPM，×6 = deg/s；1 RPM = 6 deg/s）
            ★ 目标角 100% 来自 [pitch_target_ext + 视觉外推]，不叠加摇杆
              （摇杆量已在上面的 pitch_stick_cmd 里按 aim_takeover 显式清零）*/
@@ -1037,11 +1037,14 @@ static void Gimbal_Pitch_Update(GIMBAL_DRIVES* gimbal) {
    为什么集中放一个函数：视觉一包同时带 yaw 和 pitch，两轴必须共用同一帧的
    "有效/无效"结论；而且放行只能有【一处】，才能保证"拒绝时绝不把野值写进目标变量"。
 
+   ★★ 数据语义（2026-10-26 视觉组确认）：视觉 yaw/pitch 是【相对当前姿态的偏差量】，
+   不是绝对目标角。本函数负责把它解算成绝对目标：目标 = 当前姿态 + 偏差。
+
    六道闸（阈值都是 gimbal.h 里的 GIMBAL_AIM_* 宏，单位度，方便现场调参）：
      ① NaN/Inf      —— 先于一切算术；否则后面比较全部失效、Wrap180 的 float->int 是 UB
      ② 不接管       —— 未使能 / 离线 / mode==NO_CONTROL：回摇杆，一个目标变量都不写
-     ③ yaw 量程     —— 归一化后与当前世界角偏差 > GIMBAL_AIM_MAX_ERR_DEG -> 无效
-     ④ pitch 量程   —— 超出现有机械软限位（留 GIMBAL_AIM_PITCH_MARGIN_DEG）-> 无效
+     ③ 偏差量程     —— |视觉偏差| > GIMBAL_AIM_MAX_ERR_DEG -> 无效（yaw、pitch 同判）
+     ④ pitch 量程   —— "当前关节角 + 偏差"超出现有机械软限位（留 MARGIN）-> 无效
      ⑤ 跳变门限     —— 与上一帧有效目标角差 > GIMBAL_AIM_JUMP_DEG -> 本帧无效
      ⑥ 连续无效计数 —— 连续 GIMBAL_AIM_INVALID_LIMIT 帧无效 -> 退出接管、回摇杆
    前因后果与实测野值例子见 gimbal.h 里 GIMBAL_AIM_MAX_ERR_DEG 那一段注释。 */
@@ -1062,32 +1065,59 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
         return 0;
     }
 
-    /* 单位换算：包内是【弧度】（与参考工程一致，见 user_vision.h），工程内部是【度】 */
-    const float yaw_ext = Gimbal_Wrap180(raw_yaw * VISION_PKG2DEG + gimbal->cam_yaw_off);
-    const float pitch_ext = raw_pitch * VISION_PKG2DEG + gimbal->cam_pitch_off;
-    /* TODO(需实测标定): 视觉给的 pitch 与工程内部的 pitch（上电标定后的【关节角】）之间
-       是否存在随姿态变化的差？参考工程是直接把 Get_Target_Pitch() 当关节角目标用
-       （ita_robot.cpp:725），本工程照做；若实测发现"底盘俯仰变化后 pitch 目标整体偏了"，
-       就在这里加/减 user_attitude.pitch（或用 cam_pitch_off 补掉那个常量差）。
-       注意本工程发给视觉的 pitch 只含 IMU 俯仰（VISION_PITCH_USE_IMU_ONLY=1），
-       这个约定要和视觉侧对齐。 */
+    /* ★★★ 语义修正（2026-10-26）：视觉发回来的是【偏差量（纠偏量）】，不是绝对目标角。
+       旧实现当绝对角用 -> 正反馈：云台一低头，视觉看到的偏差更大 -> 目标更低 -> 一路
+       低头撞到 pitch 下限卡死。正确关系是：
+           目标 = 当前姿态 + 偏差
+       · yaw 基准取 gimbal->yaw_fb = wrap(imu_yaw − bias_accum)：它就是位置环实际反馈，
+         也是 target_yaw / 标定平移（Gimbal_Calib_Update 里的 +old_accum）所在的世界系；
+       · pitch 基准取 gimbal->pitch（上电标定后的编码器【关节角】）：软限位/回位/下发都用它。
+       ⚠️ Gimbal_Aim_Update 在 Gimbal_Update 里跑在 yaw_fb / pitch 本拍刷新【之前】，
+          所以这里读到的是上一拍（1 ms 前）的姿态；1 kHz 任务下可忽略。 */
+    const float vision_yaw_deg   = raw_yaw   * VISION_PKG2DEG;   /* 弧度 -> 度 */
+    const float vision_pitch_deg = raw_pitch * VISION_PKG2DEG;
 
-    /* 闸③ yaw 量程：视觉给的是世界绝对角，正常跟踪时与云台当前世界角很接近；
-       差得离谱说明这一帧不是可信目标（例如 197.7° 这种 tracker 丢失时的输出）。
-       ⚠️ 单靠这道闸拦不住 -9518.6°（归一化后是 -158.6°，可能刚好落在范围内），
-          所以必须配合闸⑤的跳变门限一起用。 */
-    if (fabsf(Gimbal_Wrap180(yaw_ext - gimbal->imu_yaw)) > GIMBAL_AIM_MAX_ERR_DEG) {
+    /* 闸③ 偏差量程（原"yaw 绝对角量程"闸，偏差语义下【复用】同一道）：
+       |偏差| > GIMBAL_AIM_MAX_ERR_DEG(45°) = 野值 / 目标在视场外 -> 直接拒帧。
+       ★ 判【视觉偏差本身】，不拿 yaw_ext 反推：yaw_ext 已含 cam_yaw_off，反推会把
+         标定偏置算进"偏差"，45° 阈值就不准了；偏差量本身也不需要 Wrap180。
+       ★ 必须放在下面 Wrap180 之前：-9518.6（rad 或 deg）这类 tracker 丢失输出换算后
+         绝对值都远超 45°，在此拦下，也就没有"巨大浮点 -> int32"的 UB 风险。
+       ★ pitch 也一起判：需求是"单帧偏差绝对值 > 45° 直接拒帧"，两轴同判语义才一致。
+         正常情况下闸④已经能覆盖 pitch（关节总行程 -11.8~29.6 约 41° < 45°），
+         这里保留显式判断是刻意的冗余，不是新增闸门。 */
+    if (fabsf(vision_yaw_deg) > GIMBAL_AIM_MAX_ERR_DEG
+        || fabsf(vision_pitch_deg) > GIMBAL_AIM_MAX_ERR_DEG) {
         return 0;
     }
 
-    /* 闸④ pitch 量程：必须落在【工程已有】的机械软限位内（留一点余量兼容标定误差）*/
+    /* 偏差 -> 绝对目标：偏差是相对【当前姿态】的，所以每一帧都在当前姿态上叠加。
+       · yaw 结果归一化到 ±180（世界角）；pitch 是关节角、不绕圈，直接加。
+       ★ cam_yaw_off(-10) / cam_pitch_off(+3) 先按原值保留 —— 它们是旧绝对角语义下
+         打的靶，偏差语义下含义变成"相机光轴 <-> 枪管零位"的常量差，待用户重标。
+       ★ 收敛判据（供重标）：稳态时 偏差 = −cam_off。cam_off 校准正确时枪管落点
+         居中，但 ch1/ch4 会停在 −相机安装偏角（不一定是 0，当前参数下理论
+         ch1 ≈ +10°、ch4 ≈ −3°）。实测重标：落点偏 M 就把 cam_*_off 减 M，
+         直到落点居中。 */
+    const float yaw_ext   = Gimbal_Wrap180(gimbal->yaw_fb + vision_yaw_deg
+                                          + gimbal->cam_yaw_off);
+    const float pitch_ext = gimbal->pitch + vision_pitch_deg + gimbal->cam_pitch_off;
+
+    /* 闸④ pitch 量程：必须落在【工程已有】的机械软限位内（留一点余量兼容标定误差）
+       ★ 偏差语义下这道闸仍然【必须保留且正确】：pitch_ext 依旧是关节角目标，
+         "当前角 + 偏差"叠加后可以超出机械行程，靠它拦。 */
     if (pitch_ext > (GIMBAL_PITCH_MAX_DEG + GIMBAL_AIM_PITCH_MARGIN_DEG)
         || pitch_ext < (GIMBAL_PITCH_MIN_DEG - GIMBAL_AIM_PITCH_MARGIN_DEG)) {
         return 0;
     }
 
     /* 闸⑤ 跳变门限：和上一帧【有效】目标角比。跨 ±180° 求差要先用 Wrap180，
-       否则目标从 +179 走到 -179（实际只动 2°）会被误判成 358° 的大跳变。 */
+       否则目标从 +179 走到 -179（实际只动 2°）会被误判成 358° 的大跳变。
+       ★ 偏差语义下这道闸仍然正确、而且更稳：目标 ≈ 装甲板的世界角/关节角，云台往目标
+         转的时候 yaw_fb/pitch 在动、偏差在反向缩小，两者相加几乎不动；真正的大跳变
+         只可能来自 tracker 换目标 / 丢帧野值 —— 正是要拦的。
+       ⚠️ 极端情况：大角度快速调转时 |Δyaw_fb| 会叠加进来，但 100Hz 帧率下云台一帧
+          最多转 ~19°（按 GM6020 320RPM 估），远小于 60° 门限，不会误拒。 */
     if (fabsf(Gimbal_Wrap180(yaw_ext - gimbal->yaw_target_ext)) > GIMBAL_AIM_JUMP_DEG
         || fabsf(pitch_ext - gimbal->pitch_target_ext) > GIMBAL_AIM_JUMP_DEG) {
         return 0;
