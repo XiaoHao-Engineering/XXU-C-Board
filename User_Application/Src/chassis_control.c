@@ -262,7 +262,7 @@ static void Chassis_Apply_Plot_Mode(void) {
     &user_gimbal.yaw_rad,           /* ch8 YAW 电机编码器关节角 弧度(±π)，物理量、不漂，用来对比 ch7(IMU) 看漂移 */
     &user_gimbal.imu_yaw,    /* ch9  ★原始 IMU yaw(度，未扣零偏)，与 ch7 对比看零偏累计 */
     &user_bmi088.temperature,  /* ch10 ★IMU 温度(°C)，看恒温后漂移 */
-    &user_attitude.qe_roll,          /* ch11 ★发给视觉的 pitch(=qe_roll, 度) */
+    &user_gimbal.tx_pitch_deg,      /* ch11 ★TX 实际发给视觉的 pitch(度，上电应为0) */
     &user_gimbal.pitch_target_ext);   /* ch12 ★pitch 目标值(度) */
 }
 

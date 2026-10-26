@@ -469,6 +469,7 @@ static void Gimbal_Update(void* arg) {
        ⚠️ pitch_vel 不用改：d(pitch_fb)/dt ≡ d(gimbal->pitch)/dt（常量 9.1403 的导数为 0），
           下面 pitch_speed × 6 那套换算仍然正确。 */
     const float tx_pitch = gimbal->pitch - GIMBAL_PITCH_BOOT_TARGET_DEG;
+    gimbal->tx_pitch_deg = tx_pitch;   /* ★只读镜像：这就是 TX 真正发出去的 pitch(度) */
 
     /* ★ 回传的工作模式用【使能开关 yaw_auto】而不是 aim_takeover：
        这是和视觉的握手 —— 只有先告诉视觉"AUTOAIM"，它才会开始发 mode=1/2 的控制包；
