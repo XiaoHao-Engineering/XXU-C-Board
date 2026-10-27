@@ -1070,11 +1070,10 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
     gimbal->yaw_target_ext   = yaw_ext;
     gimbal->pitch_target_ext = pitch_ext;
     /* 角速度前馈：系数 × 视觉目标角速度（deg/s），到速度环前再 /6 换算成 RPM。
-       ★ 2026-10-27 实测：视觉 pitch_vel 会给出 20.49 rad/s（=1174°/s）的脏值，
-         乘 0.45 后 528°/s 灌进速度环 -> 云台被顶到限位。所以：
-           ① 前馈系数默认 0（见 gimbal.h GIMBAL_AIM_FF_GAIN_YAW / _PITCH）；
-           ② 前馈结果再被 GIMBAL_AIM_FF_MAX_DEG_S 硬限幅，
-              以后不管谁把系数调回非零，也不会再被脏数据打飞。*/
+       ★ 2026-10-27 实车：前馈 0.45 时 pitch 一开自瞄就被顶到限位，置 0 后正常。
+         所以 ① 前馈系数默认 0（见 gimbal.h GIMBAL_AIM_FF_GAIN_YAW / _PITCH）；
+              ② 前馈结果再被 GIMBAL_AIM_FF_MAX_DEG_S 硬限幅，
+                 以后不管谁把系数调回非零，脏的视觉角速度也不会再把云台打飞。*/
     const float ff_yaw_deg_s   = raw_yaw_vel   * VISION_PKG2DEG * gimbal->aim_ff_gain;
     const float ff_pitch_deg_s = raw_pitch_vel * VISION_PKG2DEG * gimbal->aim_ff_gain_pitch;
 

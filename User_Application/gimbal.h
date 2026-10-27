@@ -74,12 +74,15 @@
 /* ★★ 前馈系数（2026-10-27 实车定版：两个都关掉 = 0）
    参考工程 crt_gimbal.cpp:40/47 用 Set_Yaw_Feedforward_Omega_Gain(0.5) / Set_Pitch_...(0.6)，
    含义是 feedforward = 系数 × 视觉目标角速度（ita_robot.cpp:644/727）。
-   ⚠️ 但本工程实测：视觉的 pitch_vel 会突然给出 20.49 rad/s（=1174°/s）这种物理上不可能的
-      值，乘 0.45 后是 528°/s，直接灌进速度环把云台顶到限位。所以两个系数默认都为 0。
-   ⚠️ 关掉前馈的代价：跟踪【移动】目标时滞后略大；【静止】目标不受影响（前馈本来就该是 0）。
-      要恢复前馈：在线 aim_ff_gain=N# / aim_ff_pitch=N#，结果仍受下面 GIMBAL_AIM_FF_MAX_DEG_S 限幅。 */
+   ⚠️ 2026-10-27 实车：前馈 0.45 时 pitch 一开自瞄就被顶到限位；在线把
+      aim_ff_gain / aim_ff_pitch 都置 0 后，pitch 正常跟随、不再撞限位。
+      原因未完全定论：抓包确认 43 字节那一路的 bullet_speed≈20.5 m/s 正常；
+      29 字节那一路的 *vel 字段可信度还没核对过。在没有确证之前默认关前馈是安全的：
+      它只影响【移动目标】的跟随滞后，不影响静止目标（静止时目标角速度本来就该是 0）。
+   ⚠️ 要恢复前馈：在线 aim_ff_gain=N# / aim_ff_pitch=N#，从 0.1~0.2 起试，
+      结果仍受下面 GIMBAL_AIM_FF_MAX_DEG_S 限幅。 */
 #define GIMBAL_AIM_FF_GAIN_YAW   (0.0f)  /* ★ 2026-10-27 实车：前馈默认关闭（打开时受 GIMBAL_AIM_FF_MAX_DEG_S 限幅）*/
-#define GIMBAL_AIM_FF_GAIN_PITCH (0.0f)  /* ★ 2026-10-27 实车：视觉 pitch_vel 曾出现 20.49 rad/s(1174°/s) 脏值，前馈必须关闭 */
+#define GIMBAL_AIM_FF_GAIN_PITCH (0.0f)  /* ★ 2026-10-27 实车：前馈 0.45 时 pitch 撞限位，置 0 后正常；恢复请从 0.1 起试 */
 /* 兼容旧名：原来只有一个 GIMBAL_AIM_FF_GAIN(1.0)，语义就是 yaw 的角速度前馈系数 */
 #define GIMBAL_AIM_FF_GAIN       (GIMBAL_AIM_FF_GAIN_YAW)
 /* ★ 前馈【结果】硬限幅（deg/s）：视觉角速度脏值乘系数后的输出不会超过它。
