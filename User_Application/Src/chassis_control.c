@@ -539,8 +539,8 @@ static const SERIALPLOT_VAR chassis_tunable[] = {
     {"yaw_auto",      &user_gimbal.yaw_auto,          0.0f,    1.0f, NULL},
     {"aim_ff_gain",   &user_gimbal.aim_ff_gain,      -1.0f,    1.0f, NULL},
     {"aim_ff_pitch",  &user_gimbal.aim_ff_gain_pitch,-1.0f,    1.0f, NULL},
-    {"cam_yaw_off",   &user_gimbal.cam_yaw_off,     -10.0f,   10.0f, NULL},
-    {"cam_pitch_off", &user_gimbal.cam_pitch_off,   -10.0f,   10.0f, NULL},
+    {"cam_yaw_off",   &user_gimbal.cam_yaw_off,     -30.0f,   30.0f, NULL},
+    {"cam_pitch_off", &user_gimbal.cam_pitch_off,   -30.0f,   30.0f, NULL},
     /* 延迟补偿 ms：视觉"看到"的是过去的画面，用云台角速度外推到"现在"。需按实测改 */
     {"aim_delay_ms",  &user_gimbal.aim_delay_ms,      0.0f,  200.0f, NULL},
     {"aim_timeout_ms",&user_gimbal.aim_timeout_ms,    0.0f, 1000.0f, NULL},
