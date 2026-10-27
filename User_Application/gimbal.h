@@ -69,8 +69,8 @@
    与参考的差别（本工程比参考完整）：保留了下面的 aim_delay_ms 延迟外推，
    并额外加了一道【数据有效性闸门】（参考工程几乎没有无效值保护，见 GIMBAL_AIM_* 一段）。 */
 #define GIMBAL_YAW_AUTO_DEF     (0.0f)  /* 0=摇杆 1=视觉接管（在线调 yaw_auto）。★上电即开：六道保护闸同版已在，视觉离线/mode=0/NaN/越界/跳变 时完全不接管，云台照旧听摇杆 */
-#define GIMBAL_CAM_YAW_OFF       (-10.0f)  /* ★ 实测标定(2026-10-19)：准心水平居中；视觉 yaw + 本值 = 云台世界目标 */
-#define GIMBAL_CAM_PITCH_OFF     (-3.0f)   /* ★ 实测标定：准心与装甲板同高度 */
+#define GIMBAL_CAM_YAW_OFF       (0.0f)  /* ★ 实测标定(2026-10-19)：准心水平居中；视觉 yaw + 本值 = 云台世界目标 */
+#define GIMBAL_CAM_PITCH_OFF     (0.0f)   /* ★ 实测标定：准心与装甲板同高度 */
 /* ★★ 前馈系数与参考工程逐项对齐：
    crt_gimbal.cpp:40  Set_Yaw_Feedforward_Omega_Gain(0.5f)
    crt_gimbal.cpp:47  Set_Pitch_Feedforward_Omega_Gain(0.6f)
@@ -84,7 +84,7 @@
                                              （历史：曾试 0.6 导致 pitch 电机嗡嗡震，故当时关到 0；2026-10-24 与 yaw 同步取 0.25）*/
 /* 兼容旧名：原来只有一个 GIMBAL_AIM_FF_GAIN(1.0)，语义就是 yaw 的角速度前馈系数 */
 #define GIMBAL_AIM_FF_GAIN       (GIMBAL_AIM_FF_GAIN_YAW)
-#define GIMBAL_AIM_DELAY_MS     (30.0f)    /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
+#define GIMBAL_AIM_DELAY_MS     (0.0f)    /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
                                                链路延迟估计 ms（原 20，实测 30 更贴合"看到的是过去"的真实滞后）*/
 #define GIMBAL_AIM_TIMEOUT_MS   (120.0f)   /* 丢帧/离线超时 ms：超过就判"视觉真的没了" */
 
@@ -236,7 +236,7 @@
       ⚠️ 两套都保留在线可调：gimbal_tgt_smooth 改【摇杆】那套，gimbal_aim_smooth 改【自瞄】那套。
          （结构体字段名 tgt_smooth_ms 现在表示"摇杆值"，保留是为了不破坏已有的串口命令。） */
 #define GIMBAL_TGT_SMOOTH_RC_MS   (12.0f)   /* 摇杆/无目标时：小=跟手 */
- #define GIMBAL_TGT_SMOOTH_AIM_MS  (2.0f)   /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
+ #define GIMBAL_TGT_SMOOTH_AIM_MS  (0.0f)   /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
                                              （历史：2026-10-19 从 40ms 降到 12ms；2026-10-24 再降到 6ms，配合 0.25 前馈）*/
 /* 兼容旧引用：= 摇杆值；运行时不再直接用这个宏（按 aim_takeover 二选一） */
 #define GIMBAL_TGT_SMOOTH_MS      GIMBAL_TGT_SMOOTH_RC_MS
