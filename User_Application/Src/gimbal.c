@@ -1069,9 +1069,22 @@ static uint8_t Gimbal_Aim_Accept_Frame(GIMBAL_DRIVES* gimbal) {
     /* 全部通过：这是【唯一】写视觉目标的地方（拒绝路径绝不写，见函数头说明）*/
     gimbal->yaw_target_ext   = yaw_ext;
     gimbal->pitch_target_ext = pitch_ext;
-    /* 角速度前馈：系数 × 视觉目标角速度（参考 0.5 / 0.6），到速度环前再 /6 换算成 RPM */
-    gimbal->aim_rate       = raw_yaw_vel * VISION_PKG2DEG * gimbal->aim_ff_gain;
-    gimbal->pitch_aim_rate = raw_pitch_vel * VISION_PKG2DEG * gimbal->aim_ff_gain_pitch;
+    /* 角速度前馈：系数 × 视觉目标角速度（deg/s），到速度环前再 /6 换算成 RPM。
+       ★ 2026-10-27 实测：视觉 pitch_vel 会给出 20.49 rad/s（=1174°/s）的脏值，
+         乘 0.45 后 528°/s 灌进速度环 -> 云台被顶到限位。所以：
+           ① 前馈系数默认 0（见 gimbal.h GIMBAL_AIM_FF_GAIN_YAW / _PITCH）；
+           ② 前馈结果再被 GIMBAL_AIM_FF_MAX_DEG_S 硬限幅，
+              以后不管谁把系数调回非零，也不会再被脏数据打飞。*/
+    const float ff_yaw_deg_s   = raw_yaw_vel   * VISION_PKG2DEG * gimbal->aim_ff_gain;
+    const float ff_pitch_deg_s = raw_pitch_vel * VISION_PKG2DEG * gimbal->aim_ff_gain_pitch;
+
+    gimbal->aim_rate = (ff_yaw_deg_s > GIMBAL_AIM_FF_MAX_DEG_S) ? GIMBAL_AIM_FF_MAX_DEG_S
+                     : (ff_yaw_deg_s < -GIMBAL_AIM_FF_MAX_DEG_S) ? -GIMBAL_AIM_FF_MAX_DEG_S
+                     : ff_yaw_deg_s;
+
+    gimbal->pitch_aim_rate = (ff_pitch_deg_s > GIMBAL_AIM_FF_MAX_DEG_S) ? GIMBAL_AIM_FF_MAX_DEG_S
+                           : (ff_pitch_deg_s < -GIMBAL_AIM_FF_MAX_DEG_S) ? -GIMBAL_AIM_FF_MAX_DEG_S
+                           : ff_pitch_deg_s;
     /* ★ 一帧通过全部闸门的有效数据 = "视觉恢复正常"的证据：解除闸⑥的重新接管锁存。
        注意只清这个锁存，不在这里动 aim_takeover —— 是否接管由 Gimbal_Aim_Update 的
        统一入口判定（下一拍起允许），避免绕开闸②的在线/mode 判断。 */

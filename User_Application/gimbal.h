@@ -69,23 +69,23 @@
    与参考的差别（本工程比参考完整）：保留了下面的 aim_delay_ms 延迟外推，
    并额外加了一道【数据有效性闸门】（参考工程几乎没有无效值保护，见 GIMBAL_AIM_* 一段）。 */
 #define GIMBAL_YAW_AUTO_DEF     (0.0f)  /* 0=摇杆 1=视觉接管（在线调 yaw_auto）。★上电即开：六道保护闸同版已在，视觉离线/mode=0/NaN/越界/跳变 时完全不接管，云台照旧听摇杆 */
-#define GIMBAL_CAM_YAW_OFF       (0.0f)  /* ★ 实测标定(2026-10-19)：准心水平居中；视觉 yaw + 本值 = 云台世界目标 */
-#define GIMBAL_CAM_PITCH_OFF     (9.1403f)   /* ★ 实测标定：准心与装甲板同高度 */
-/* ★★ 前馈系数与参考工程逐项对齐：
-   crt_gimbal.cpp:40  Set_Yaw_Feedforward_Omega_Gain(0.5f)
-   crt_gimbal.cpp:47  Set_Pitch_Feedforward_Omega_Gain(0.6f)
-   ita_robot.cpp:644/727  feedforward = 系数 × 视觉目标角速度
-   ⚠️ 它们只是"用视觉角速度的百分之多少去喂速度环"的无量纲系数（前馈不在反馈回路里，
-      改它不影响稳定性，只影响跟踪移动目标时的滞后/超调）。在线可调：aim_ff_gain / aim_ff_pitch */
-#define GIMBAL_AIM_FF_GAIN_YAW   (0.45f)  /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
-                                             （历史：2026-10-24 取 0.25 是"打提前量"与"不抖"之间的折中；
-                                               2026-10-17 因视觉角速度噪声大(±16deg/s)、开 0.5 会把噪声灌进速度环而关到 0）*/
-#define GIMBAL_AIM_FF_GAIN_PITCH (0.45f)  /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
-                                             （历史：曾试 0.6 导致 pitch 电机嗡嗡震，故当时关到 0；2026-10-24 与 yaw 同步取 0.25）*/
+#define GIMBAL_CAM_YAW_OFF       (0.0f)  /* 视觉发的是绝对 yaw，直接用；本项留作相机安装偏角微调 */
+#define GIMBAL_CAM_PITCH_OFF     (9.1403f)   /* ★ 机械零点补偿：本工程枪管水平时 pitch 编码器读数 = +9.1403°，而视觉发的是水平=0 的绝对角，故 关节角目标 = 视觉 pitch + 本值。这是机械零点差，不是相机安装偏角 */
+/* ★★ 前馈系数（2026-10-27 实车定版：两个都关掉 = 0）
+   参考工程 crt_gimbal.cpp:40/47 用 Set_Yaw_Feedforward_Omega_Gain(0.5) / Set_Pitch_...(0.6)，
+   含义是 feedforward = 系数 × 视觉目标角速度（ita_robot.cpp:644/727）。
+   ⚠️ 但本工程实测：视觉的 pitch_vel 会突然给出 20.49 rad/s（=1174°/s）这种物理上不可能的
+      值，乘 0.45 后是 528°/s，直接灌进速度环把云台顶到限位。所以两个系数默认都为 0。
+   ⚠️ 关掉前馈的代价：跟踪【移动】目标时滞后略大；【静止】目标不受影响（前馈本来就该是 0）。
+      要恢复前馈：在线 aim_ff_gain=N# / aim_ff_pitch=N#，结果仍受下面 GIMBAL_AIM_FF_MAX_DEG_S 限幅。 */
+#define GIMBAL_AIM_FF_GAIN_YAW   (0.0f)  /* ★ 2026-10-27 实车：前馈默认关闭（打开时受 GIMBAL_AIM_FF_MAX_DEG_S 限幅）*/
+#define GIMBAL_AIM_FF_GAIN_PITCH (0.0f)  /* ★ 2026-10-27 实车：视觉 pitch_vel 曾出现 20.49 rad/s(1174°/s) 脏值，前馈必须关闭 */
 /* 兼容旧名：原来只有一个 GIMBAL_AIM_FF_GAIN(1.0)，语义就是 yaw 的角速度前馈系数 */
 #define GIMBAL_AIM_FF_GAIN       (GIMBAL_AIM_FF_GAIN_YAW)
-#define GIMBAL_AIM_DELAY_MS     (0.0f)    /* ★ 实测(2026-10-25)：装甲板横向平移跟随，前馈 0.45 + 自瞄平滑 2ms + 外推 30ms，滞后和幅值衰减明显改善，且不抖。前馈理论最优 1.0，仍受视觉角速度噪声限制。
-                                               链路延迟估计 ms（原 20，实测 30 更贴合"看到的是过去"的真实滞后）*/
+/* ★ 前馈【结果】硬限幅（deg/s）：视觉角速度脏值乘系数后的输出不会超过它。
+   300°/s 远低于 GM6020 能力上限，只用来拦住物理上不可能的指令，不影响正常跟踪。 */
+#define GIMBAL_AIM_FF_MAX_DEG_S  (300.0f)
+#define GIMBAL_AIM_DELAY_MS     (0.0f)    /* 链路延迟外推 ms：2026-10-27 实车置 0（前馈关闭后外推会重复补偿，实测 0 更稳）。在线可调 aim_delay_ms */
 #define GIMBAL_AIM_TIMEOUT_MS   (120.0f)   /* 丢帧/离线超时 ms：超过就判"视觉真的没了" */
 
 /* ---- ★★★ 视觉数据有效性闸门（安全关键；参考工程没有，本工程必须有）--------------
